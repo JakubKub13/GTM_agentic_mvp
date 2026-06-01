@@ -1,140 +1,150 @@
-# duvo-signal-loop — Design Spec
+# duvo-signal-loop — Design Spec (multi-agent)
 
 **Date:** 2026-06-01
 **Author:** Jakub Kubala
-**Context:** Take-home for Duvo.ai GTM Engineer role (CEO Tomas Cupr). Build something
-that fixes a slow/manual B2B GTM loop, runs for real, and can be poked live. Stack to
-build against: HubSpot, lemlist, Gong, Exa. Time budget: 3–4 hours. Deliverable: repo +
-Loom + one-page note. Present EOD Tuesday 2026-06-02.
+**Context:** Take-home for Duvo.ai GTM Engineer role (CEO Tomas Cupr). Build something that
+fixes a slow/manual B2B GTM loop, runs for real, and can be poked live. Stack to build against:
+HubSpot, lemlist, Gong, Exa. Time budget: 3–4 hours. Deliverable: repo + Loom + one-page note.
+Present EOD Tuesday 2026-06-02.
 
 ## One-liner
 
-Take a realistic target list of retail/CPG accounts. For each account, collect real intent
-signals via Exa in parallel, run them through a validating synthesizer with an
-anti-hallucination guard, score ICP fit (1–10 + tier) and draft personalized outreach per
-persona, then **write back into the real stack**: HubSpot (custom property + note with
-evidence) → Slack alert for Tier 1 → lemlist as a **paused** draft campaign awaiting rep
-approval.
+A small **team of AI agents** that turns a target list of retail/CPG accounts into rep-ready
+pipeline. Per account: parallel **scout agents** (each with an Exa search tool) hunt sourced
+intent signals, an **analyst agent** validates them — verifying doubtful claims with its own
+searches before trusting them — scores ICP fit and drafts personalized outreach, and a **router
+agent** decides how to action the account into the real stack (HubSpot, Slack, lemlist). Python
+only orchestrates the hand-offs; each node is a genuine tool-using agent, not a fixed query.
 
-## Why this problem
+## Why agents, not a workflow (the design thesis)
 
-A 5-person GTM team's slowest, most manual loop is: notice a trigger event → figure out if
-the account fits → research the right persona and angle → draft something worth sending →
-log it in the CRM so it isn't lost. Today that's tabs, copy-paste, and tribal memory. This
-system collapses a 30-minute-per-account manual task into a 30-second review. It mirrors the
-exact shape Tomas already validated in the Rohlik briefing agent: parallel collectors → a
-validated synthesizer with guards against making things up → fan-out per recipient.
+Each scout is a real agent loop: it decides its own queries, follows the most promising thread,
+and stops when it has enough. The analyst can dispatch its own verification searches to refute a
+claim before trusting it. The router reasons about what actions an account warrants. This is the
+shape Tomas already validated in the Rohlik briefing agent — parallel tool-using collectors into
+a validated synthesizer with guards against making things up, fanning out per recipient — rebuilt
+against Duvo's stack.
+
+**But agency is bounded on purpose.** Agents own *reversible, low-stakes* decisions (which query
+to run, which persona to target, which channel to use). *Irreversible* steps — capping a
+hallucinated score, and never sending cold email — are hard deterministic guards and a human
+approval gate, not things the agent is trusted to get right. Knowing where to *withhold* agency
+is the same judgment as knowing where to leave a human in the loop.
 
 ## Architecture
 
-Per-account pipeline, accounts processed with light concurrency:
+Per-account, Python orchestrates three agent stages:
 
 ```
 companies.csv
-   │  (per account)
+   │  per account — Python orchestrator (the conductor)
    ▼
-[Exa] 4 parallel signal queries  → raw hits
-   │   - ERP / tech migration
-   │   - hiring (supply chain / procurement / ops)
-   │   - M&A / leadership change
-   │   - operational pain points
+┌── SCOUT AGENTS (4, parallel) ─────────────────────────┐
+│  beats: erp_migration · hiring · ma_leadership · pain │  each = Claude agent
+│  tool: exa_search                                      │  with a ReAct tool
+│  loop: decide query → search → read → refine → repeat  │  loop (bounded)
+│  finish: submit_signals(...)  ← only SOURCED signals   │
+└────────────────────────────────────────────────────────┘
+   ▼  all signals
+ANALYST AGENT
+   tools: exa_search (verification), record_assessment
+   - may run up to 2 verification searches to refute a doubtful claim
+   - outputs score, tier, confidence, persona, angle, outreach draft
+   ▼  + deterministic apply_guards()  (caps hallucinated confidence)
+ROUTER AGENT
+   tools: hubspot_upsert, slack_alert, lemlist_queue, finish
+   - decides which actions the account warrants
+   - tools SELF-GUARD: slack/lemlist refuse unless confident Tier 1
    ▼
-[Claude #1] VALIDATING SYNTH + GUARD
-   - drop hits with no published date / off-topic
-   - thin signal → confidence=low, do NOT score high
-   ▼
-[Claude #2] SCORE (1–10, tier) + DRAFT outreach per persona
-   ▼
-┌──────────────── WRITE-BACK ────────────────┐
-│ [HubSpot]  upsert company + contact,         │  always
-│            set icp_score property,           │
-│            attach note: evidence + angle      │
-│            (labeled "AI-suggested, review")   │
-│ [Slack]    alert #sales — Tier 1 only         │  tier 1
-│ [lemlist]  add lead → PAUSED campaign (draft) │  tier 1, awaits rep
-└───────────────────────────────────────────────┘
-   │
-   ▼
-output/run-report.html   (audit log for the Loom — NOT the deliverable)
+output/run-report.html   (audit log: every agent's tool calls — for the Loom, not the deliverable)
 ```
+
+## The agent runtime
+
+A single reusable `run_agent(system, user, tools, impls, max_turns, final_tools)` helper
+implements the Anthropic tool-use loop: call the model → execute any tool_use blocks → feed
+results back → repeat until the agent calls a designated *final* tool or stops. Every agent in
+the system is one call to this helper with a different toolset. This keeps the "agent" concept
+honest (model-directed tool use in a loop) and the codebase small and auditable.
 
 ## Components
 
-| File | Purpose | Depends on |
-|------|---------|-----------|
-| `config.py` | Load keys from `.env` | python-dotenv |
-| `models.py` | Pydantic: `Company`, `Signal`, `ICPScore`, `OutreachDraft`, `RunResult` | pydantic |
-| `signal_collector.py` | `collect_signals(company) -> list[Signal]`; 4 parallel Exa queries; tolerant of empty results | exa-py |
-| `scorer.py` | `synthesize_and_score(company, signals) -> ICPScore`; Claude call #1 (validate+guard) and #2 (score+draft) via forced tool_use | anthropic |
-| `writeback/hubspot.py` | `upsert_account(score)`; create/update company+contact, set `icp_score`, attach evidence note | requests / hubspot SDK |
-| `writeback/slack.py` | `alert_tier1(score)`; Block Kit message via incoming webhook | requests |
-| `writeback/lemlist.py` | `queue_draft(score)`; add lead to a pre-created PAUSED campaign | requests |
-| `reporter.py` | `generate_report(results)`; local HTML audit log | jinja2 |
-| `main.py` | Orchestrate: load → per-account pipeline → write-back → report | — |
+| File | Responsibility | Agent? |
+|------|----------------|--------|
+| `config.py` | Env keys, model id | — |
+| `models.py` | Pydantic: `Company`, `Signal`, `OutreachDraft`, `ICPScore`, `RunResult` | — |
+| `agent_core.py` | `run_agent()` tool-use loop + shared Anthropic client | runtime |
+| `tools/exa_tool.py` | `exa_search` tool schema + impl (used by scouts and analyst) | tool |
+| `scouts.py` | `run_scout(company, beat)` — one scout agent per beat; `scout_all()` runs 4 in parallel | ✔ scout |
+| `analyst.py` | `run_analyst(company, signals)` — analyst agent; `apply_guards()` deterministic post-guard | ✔ analyst |
+| `writeback/{hubspot,slack,lemlist}.py` | Deterministic, self-guarding API calls | — |
+| `router.py` | `run_router(rr, dry_run)` — router agent; write-backs exposed as its tools | ✔ router |
+| `reporter.py` + `templates/report.html` | HTML audit log of the run | — |
+| `main.py` | Orchestrate per account: scouts → analyst → router → report; `--dry-run` | conductor |
 
 ## Data model (key fields)
 
 - `Signal`: `signal_type`, `title`, `summary`, `source_url`, `published_date`, `relevance`
-- `ICPScore`: `company`, `score:int`, `tier`, `confidence`, `signals:list[Signal]`,
-  `why_fit:list[str]`, `why_not:list[str]`, `recommended_persona`, `recommended_angle`,
-  `reasoning`, `outreach:OutreachDraft`, `needs_human_research:bool`
 - `OutreachDraft`: `persona`, `subject`, `first_line`, `body`
+- `ICPScore`: `company_name`, `domain`, `score:int`, `tier`, `confidence`, `why_fit`, `why_not`,
+  `recommended_persona`, `recommended_angle`, `reasoning`, `needs_human_research:bool`, `outreach`
+- `RunResult`: `score`, `signals`, `hubspot_status`, `slack_status`, `lemlist_status`,
+  `agent_log: list[str]` (tool calls each agent made — shown in the report)
+
+## Where agency is bounded (deliberate human-in-the-loop)
+
+1. **Scouts cannot invent.** System prompt forbids unsourced claims; the analyst independently
+   verifies; undated/unsourced signals are discarded.
+2. **The analyst's score is capped by a deterministic guard.** `apply_guards()` — not the model —
+   forces `confidence=low` + `needs_human_research=true` when evidence is thin, and caps a
+   low-confidence high score. The model cannot talk its way past this.
+3. **The router never sends.** `lemlist_queue` only adds a lead to a **paused** campaign; a rep
+   approves and sends. `slack_alert` and `lemlist_queue` self-refuse unless the account is a
+   confident Tier 1 — true even if the router agent decides otherwise. HubSpot notes are labeled
+   "AI-suggested — review before outreach."
 
 ## Layered build order (time insurance)
 
-- **T0 (~2h, must run):** Exa → Claude synth+guard+score+draft → HubSpot write-back. This
-  alone is a closed loop into the CRM; the demo stands even if nothing else lands.
-- **T1 (+30m):** Slack alert for Tier 1. Trivial webhook; highest visual payoff for the Loom.
-- **T2 (+1h, riskiest, last):** lemlist push as paused campaign. If the API misbehaves,
-  fall back to creating the lead without launch + screenshot, and say so honestly.
-
-## Human-in-the-loop (deliberate)
-
-1. **The system never sends.** lemlist campaign stays *paused*; the rep approves and sends.
-   We automate research + drafting; the human owns the decision to make contact.
-2. **Thin signal → guard fires.** Accounts with weak signals are not scored high, are flagged
-   `needs_human_research`, and are not pushed to lemlist. Demonstrated live in the Loom.
-3. HubSpot note is labeled "AI-suggested, review before outreach."
+- **T0 (~2.5h, must run):** `agent_core` + `exa_tool` + scouts + analyst + `apply_guards` +
+  HubSpot write-back + a minimal router (HubSpot tool only) + report. A complete agentic loop
+  into the CRM. The demo stands even if nothing else lands.
+- **T1 (+30m):** add `slack_alert` to the router's toolset.
+- **T2 (+45m, riskiest, last):** add `lemlist_queue` (paused campaign) to the router's toolset.
 
 ## Target list
 
-8–12 real EU retail/CPG accounts with genuine recent public triggers (ERP news, M&A,
-leadership), plus 1–2 deliberately weak/small accounts so the guard can be shown firing live.
+8–10 real EU retail/CPG accounts with genuine recent public triggers, plus 1–2 deliberately
+weak/small accounts so the guard fires on camera (scouts find little → analyst flags →
+router declines Slack/lemlist).
 
 ## Error handling
 
-- Exa returns nothing for a query → continue with that query's signals empty; never crash.
-- Account ends with zero usable signals → `confidence=low`, `needs_human_research=true`,
-  HubSpot note created, no Slack/lemlist.
-- Claude tool_use enforced (`tool_choice`) → guaranteed structured output, no JSON parsing.
-- Each write-back call wrapped in try/except; a failed channel is logged in `RunResult`,
-  pipeline continues. Per-account isolation: one bad account never aborts the run.
-- Light concurrency + small sleep between accounts to respect Exa rate limits.
-
-## Testing
-
-- `models.py` validated by construction (pydantic).
-- A `--dry-run` flag that runs Exa + scoring but stubs the three write-back calls (prints
-  what *would* be written) — lets us iterate without polluting HubSpot/lemlist and is the
-  safe mode to run live if a real write misbehaves during the call.
-- One smoke test per write-back module against the real sandbox (create + read back).
+- Each scout degrades to empty on any Exa/model error; one bad scout never aborts the account.
+- `run_agent` is bounded by `max_turns`; an agent that never finishes returns what it has.
+- Analyst with no usable signals → conservative `needs_human_research` default.
+- Router tools wrapped so a failed channel is logged in `RunResult` and the run continues.
+- `--dry-run`: router agent still runs and *really decides*, but the write-back tools simulate
+  (print what they would do). Safe iteration and the live-demo fallback.
 
 ## Where it breaks (for Tomas)
 
-- Exa noise/staleness on large brands; the guard mitigates but recall is limited.
-- No real person-level email — we recommend a persona but use the candidate's own email as
-  the test contact in the demo. Honest limitation.
-- One-shot script; production = weekly cron + score diff + alert only on change.
-- No dedup against existing HubSpot pipeline (production would check before creating).
+- Exa noise/staleness on large brands; scout iteration + analyst verification mitigate, recall
+  still limited.
+- Agent loops add latency and variance; bounded by turn caps, so worst case is degraded recall,
+  not a hang. Demo runs 2–3 accounts live, the full list is pre-run.
+- No real person-level email — persona is recommended; the demo uses a test email as the lead.
+- One-shot run; production = scheduled run + score diff + alert only on change.
+- No dedup vs. existing HubSpot pipeline.
 
 ## What I'd build next (one week)
 
-Net-new account discovery via Exa as the front of the loop · Gong call-outcome → HubSpot
-write-back · reply handling in lemlist branching on intent · person-level enrichment (Apollo)
-for real emails.
+Promote scouts to MCP-tool agents (Apollo/LinkedIn/Gong as tools) · a discovery agent that finds
+net-new accounts from a trigger before scoring · Gong call-outcome agent writing back to HubSpot ·
+a reply-handling agent that branches the lemlist sequence on intent · person-level enrichment for
+real emails. The `run_agent` runtime stays; only toolsets grow.
 
 ## Tech
 
-Python 3.11+ · exa-py · anthropic (Claude, forced tool_use) · requests · pydantic · jinja2 ·
-python-dotenv. Keys: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `HUBSPOT_TOKEN`,
-`SLACK_WEBHOOK_URL`, `LEMLIST_API_KEY`, `LEMLIST_CAMPAIGN_ID`.
+Python 3.11+ · anthropic (tool-use loop) · exa-py · requests · pydantic · jinja2 · python-dotenv.
+Keys: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `HUBSPOT_TOKEN`, `SLACK_WEBHOOK_URL`, `LEMLIST_API_KEY`,
+`LEMLIST_CAMPAIGN_ID`, `TEST_EMAIL`.
