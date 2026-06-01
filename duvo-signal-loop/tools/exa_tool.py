@@ -14,6 +14,7 @@ def _get_exa() -> Exa:
     Lazy init means the module can be imported in tests without a real API key;
     the key is only validated when an actual search is attempted.
     """
+    # Double-construct race with parallel scout threads is benign under CPython's GIL; clients are stateless.
     global _exa
     if _exa is None:
         _exa = Exa(api_key=require("EXA_API_KEY", EXA_API_KEY))

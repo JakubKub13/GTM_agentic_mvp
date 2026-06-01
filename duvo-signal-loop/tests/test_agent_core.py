@@ -249,6 +249,46 @@ class TestRunAgentMaxTurns:
         assert fake_client.messages.create.call_count == 8
 
 
+class TestRunAgentUnknownTool:
+    """When the model calls a tool name not in impls, the loop handles it gracefully."""
+
+    def test_unknown_tool_does_not_crash(self, fake_client):
+        unknown_block = _make_tool_use_block("ghost_tool", {"x": 1}, "tu-ghost")
+        fake_client.messages.create.side_effect = [
+            _make_response([unknown_block]),
+            _make_response([_make_text_block("ok")]),
+        ]
+
+        with patch("agent_core._get_client", return_value=fake_client):
+            from agent_core import run_agent
+            # Must not raise
+            messages = run_agent("sys", "go", [], impls={})
+
+        # Loop should continue and terminate normally (two create calls)
+        assert fake_client.messages.create.call_count == 2
+
+    def test_unknown_tool_result_content_is_clearly_labelled(self, fake_client):
+        unknown_block = _make_tool_use_block("ghost_tool", {"x": 1}, "tu-ghost2")
+        fake_client.messages.create.side_effect = [
+            _make_response([unknown_block]),
+            _make_response([_make_text_block("done")]),
+        ]
+
+        with patch("agent_core._get_client", return_value=fake_client):
+            from agent_core import run_agent
+            messages = run_agent("sys", "go", [], impls={})
+
+        # Find tool_result turns
+        tool_result_turns = [
+            m for m in messages
+            if isinstance(m.get("content"), list)
+            and any(isinstance(r, dict) and r.get("type") == "tool_result" for r in m["content"])
+        ]
+        assert tool_result_turns, "Expected a tool_result turn in messages"
+        result_content = tool_result_turns[0]["content"][0]["content"]
+        assert result_content == "unknown tool: ghost_tool"
+
+
 class TestShortHelper:
     """_short() truncates long dict values and joins items."""
 

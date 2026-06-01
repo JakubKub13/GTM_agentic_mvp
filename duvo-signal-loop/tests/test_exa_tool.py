@@ -218,8 +218,7 @@ class TestExaLazyInit:
     def test_get_exa_raises_when_key_missing(self, monkeypatch):
         """_get_exa() must raise RuntimeError when EXA_API_KEY is empty."""
         import tools.exa_tool
-        # Reset the cached client
-        tools.exa_tool._exa = None
+        # Reset the cached client so _get_exa() re-runs initialisation
         monkeypatch.setattr("tools.exa_tool._exa", None)
 
         with patch("tools.exa_tool.EXA_API_KEY", ""):

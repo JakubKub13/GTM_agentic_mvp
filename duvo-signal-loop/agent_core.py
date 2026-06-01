@@ -1,4 +1,6 @@
 """Reusable Anthropic tool-use loop — the runtime every agent in the system runs on."""
+from collections.abc import Callable, Iterable
+
 from anthropic import Anthropic
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, require
 from logging_setup import get_logger
@@ -14,13 +16,14 @@ def _get_client() -> Anthropic:
     Lazy init means the module can be imported in tests without a real API key;
     the key is only validated when an actual API call is made.
     """
+    # Double-construct race with parallel scout threads is benign under CPython's GIL; clients are stateless.
     global _client
     if _client is None:
         _client = Anthropic(api_key=require("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY))
     return _client
 
 
-def run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+def run_agent(system: str, user: str, tools: list[dict], impls: dict[str, Callable], max_turns: int = 8, final_tools: Iterable[str] = (), log: list[str] | None = None) -> list:
     """Drive a tool-using Anthropic agent to completion.
 
     Calls the model, dispatches any ``tool_use`` blocks through *impls*, feeds
@@ -69,11 +72,15 @@ def run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None)
             if log is not None:
                 log.append(f"{tu.name}({_short(tu.input)})")
 
-            try:
-                output = impls[tu.name](**tu.input)
-            except Exception as exc:
-                _log.warning("tool %s raised: %s", tu.name, exc)
-                output = f"tool error: {exc}"
+            if tu.name not in impls:
+                _log.warning("model called unknown tool: %s", tu.name)
+                output = f"unknown tool: {tu.name}"
+            else:
+                try:
+                    output = impls[tu.name](**tu.input)
+                except Exception as exc:
+                    _log.warning("tool %s raised: %s", tu.name, exc)
+                    output = f"tool error: {exc}"
 
             results.append({
                 "type": "tool_result",
