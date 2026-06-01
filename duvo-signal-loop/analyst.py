@@ -141,7 +141,15 @@ def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPScore:
         )
         captured["confidence"] = "low"
 
-    outreach = OutreachDraft(**captured.pop("outreach"))
+    outreach_raw = captured.pop("outreach", {})
+    try:
+        outreach = OutreachDraft(**outreach_raw)
+    except Exception as exc:
+        _log.warning(
+            "analyst: malformed outreach for company=%r (%s) — using empty fallback",
+            company.name, exc,
+        )
+        outreach = OutreachDraft(persona="", subject="", first_line="", body="")
     score = ICPScore(company_name=company.name, domain=company.domain, outreach=outreach, **captured)
     result = apply_guards(score, signals)
     _log.info(

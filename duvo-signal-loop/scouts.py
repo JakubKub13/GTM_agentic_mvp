@@ -1,5 +1,6 @@
 """Scout agents: one per signal beat, each a tool-using agent over exa_search."""
 from concurrent.futures import ThreadPoolExecutor
+from typing import Literal
 
 from config import MAX_SCOUT_SEARCHES
 from models import Company, Signal
@@ -46,7 +47,9 @@ SUBMIT_TOOL = {
 }
 
 
-def run_scout(company: Company, beat_key: str, beat_desc: str, log=None) -> list[Signal]:
+def run_scout(company: Company,
+              beat_key: Literal["erp_migration", "hiring", "ma_leadership", "pain"],
+              beat_desc: str, log=None) -> list[Signal]:
     """Run a single scout agent for one beat and return the signals it finds.
 
     Args:
@@ -97,6 +100,19 @@ def run_scout(company: Company, beat_key: str, beat_desc: str, log=None) -> list
     return out
 
 
+def _run_scout_safe(company: Company, beat_key: str, beat_desc: str, log=None) -> list[Signal]:
+    """Wrapper around run_scout that isolates per-beat failures.
+
+    If run_scout raises for one beat, logs the error and returns [] so the
+    other beats' results are not discarded.
+    """
+    try:
+        return run_scout(company, beat_key, beat_desc, log)
+    except Exception as exc:
+        _log.error("scout beat=%s failed for company=%r: %s", beat_key, company.name, exc)
+        return []
+
+
 def scout_all(company: Company, log=None) -> list[Signal]:
     """Run all 4 scout agents in parallel for one company.
 
@@ -109,7 +125,7 @@ def scout_all(company: Company, log=None) -> list[Signal]:
         Flattened list of all Signal objects from all 4 beats.
     """
     with ThreadPoolExecutor(max_workers=4) as ex:
-        groups = list(ex.map(lambda b: run_scout(company, b[0], b[1], log), BEATS))
+        groups = list(ex.map(lambda b: _run_scout_safe(company, b[0], b[1], log), BEATS))
     signals = [sig for group in groups for sig in group]
     _log.info("scout_all done: company=%r total_signals=%d", company.name, len(signals))
     return signals

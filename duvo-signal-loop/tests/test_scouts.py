@@ -3,6 +3,7 @@ from unittest.mock import patch
 import pytest
 
 from models import Company, Signal
+from scouts import run_scout, scout_all, BEATS
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +47,6 @@ class TestRunScout:
         company = _make_company()
         fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "erp_migration", "ERP beat desc")
 
         assert len(signals) == 1
@@ -57,7 +57,6 @@ class TestRunScout:
         for beat_key in ["erp_migration", "hiring", "ma_leadership", "pain"]:
             fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
             with patch("scouts.run_agent", side_effect=fake):
-                from scouts import run_scout
                 signals = run_scout(company, beat_key, "some beat desc")
             assert len(signals) == 1
             assert signals[0].signal_type == beat_key
@@ -66,7 +65,6 @@ class TestRunScout:
         company = _make_company()
         fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "erp_migration", "ERP desc")
         assert signals[0].title == "Acme ERP Migration"
 
@@ -75,7 +73,6 @@ class TestRunScout:
         company = _make_company()
         fake = _make_fake_run_agent([sig_without_title])
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "hiring", "hiring desc")
         assert signals[0].title == "(no title)"
 
@@ -84,7 +81,6 @@ class TestRunScout:
         company = _make_company()
         fake = _make_fake_run_agent([sig])
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "pain", "pain desc")
         assert signals[0].summary == ""
 
@@ -93,7 +89,6 @@ class TestRunScout:
         company = _make_company()
         fake = _make_fake_run_agent([sig])
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "ma_leadership", "M&A desc")
         assert signals[0].relevance == ""
 
@@ -102,7 +97,6 @@ class TestRunScout:
         company = _make_company()
         fake = _make_fake_run_agent([sig])
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "pain", "pain desc")
         assert signals[0].published_date is None
 
@@ -111,7 +105,6 @@ class TestRunScout:
         company = _make_company()
         fake = _make_fake_run_agent([sig])
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "erp_migration", "ERP desc")
         assert signals[0].published_date is None
 
@@ -120,7 +113,6 @@ class TestRunScout:
         fake = _make_fake_run_agent([], call_submit=False)
         company = _make_company()
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "erp_migration", "ERP desc")
         assert signals == []
 
@@ -129,7 +121,6 @@ class TestRunScout:
         company = _make_company()
         fake = _make_fake_run_agent(sigs)
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             signals = run_scout(company, "hiring", "hiring desc")
         assert len(signals) == 2
 
@@ -138,7 +129,6 @@ class TestRunScout:
         log = []
         fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
         with patch("scouts.run_agent", side_effect=fake):
-            from scouts import run_scout
             run_scout(company, "erp_migration", "ERP desc", log=log)
         # The fake appends an entry to log when called
         assert len(log) >= 1
@@ -159,7 +149,6 @@ class TestScoutAll:
 
         company = _make_company()
         with patch("scouts.run_agent", side_effect=fake_run_agent):
-            from scouts import scout_all
             signals = scout_all(company)
 
         assert len(signals) == 4
@@ -172,7 +161,6 @@ class TestScoutAll:
 
         company = _make_company()
         with patch("scouts.run_agent", side_effect=fake_run_agent):
-            from scouts import scout_all
             signals = scout_all(company)
 
         types_found = {s.signal_type for s in signals}
@@ -186,7 +174,6 @@ class TestScoutAll:
 
         company = _make_company()
         with patch("scouts.run_agent", side_effect=fake_run_agent):
-            from scouts import scout_all
             signals = scout_all(company)
 
         assert signals == []
@@ -202,8 +189,34 @@ class TestScoutAll:
         company = _make_company()
         log = []
         with patch("scouts.run_agent", side_effect=fake_run_agent):
-            from scouts import scout_all
             scout_all(company, log=log)
 
         # 4 beats each appended 1 entry
         assert len(log) == 4
+
+    def test_one_beat_exception_does_not_crash_scout_all(self):
+        """If one beat's run_scout raises, scout_all still returns the other beats' signals."""
+        call_count = {"n": 0}
+
+        def fake_run_scout(company, beat_key, beat_desc, log=None):
+            call_count["n"] += 1
+            if beat_key == "erp_migration":
+                raise RuntimeError("simulated scout failure")
+            # Other beats return one signal each
+            return [Signal(
+                signal_type=beat_key,
+                title="Test Signal",
+                summary="summary",
+                source_url="https://example.com",
+                relevance="relevant",
+            )]
+
+        company = _make_company()
+        with patch("scouts.run_scout", side_effect=fake_run_scout):
+            signals = scout_all(company)
+
+        # 3 beats succeeded (hiring, ma_leadership, pain) → 3 signals
+        assert len(signals) == 3
+        signal_types = {s.signal_type for s in signals}
+        assert "erp_migration" not in signal_types
+        assert signal_types == {"hiring", "ma_leadership", "pain"}

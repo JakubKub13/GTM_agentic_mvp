@@ -3,6 +3,7 @@ from unittest.mock import patch
 import pytest
 
 from models import Company, Signal, ICPScore, OutreachDraft
+from analyst import run_analyst, apply_guards
 
 
 # ---------------------------------------------------------------------------
@@ -70,7 +71,6 @@ class TestRunAnalystNormalPath:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(VALID_ASSESSMENT)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         assert isinstance(result, ICPScore)
 
@@ -79,7 +79,6 @@ class TestRunAnalystNormalPath:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(VALID_ASSESSMENT)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         assert result.company_name == "TestCo"
         assert result.domain == "testco.com"
@@ -89,7 +88,6 @@ class TestRunAnalystNormalPath:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(VALID_ASSESSMENT)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         assert isinstance(result.outreach, OutreachDraft)
         assert result.outreach.subject == "Automating your SAP go-live"
@@ -100,7 +98,6 @@ class TestRunAnalystNormalPath:
         signals = [_make_signal(published_date="2024-01-15")]
         fake = _make_fake_run_agent(VALID_ASSESSMENT)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         # After guards: score=8 >=8, not needs_human_research → Tier 1
         assert result.tier == "Tier 1"
@@ -119,7 +116,6 @@ class TestRunAnalystConservativeDefault:
         signals = []
         fake = _make_fake_run_agent(assessment_kwargs=None)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         assert result.score == 3
         assert result.tier == "Tier 3"
@@ -130,7 +126,6 @@ class TestRunAnalystConservativeDefault:
         company = _make_company()
         fake = _make_fake_run_agent(assessment_kwargs=None)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, [])
         assert isinstance(result, ICPScore)
 
@@ -148,7 +143,6 @@ class TestScoreClamping:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         # Clamped to 10 — no ValidationError
         assert result.score == 10
@@ -160,7 +154,6 @@ class TestScoreClamping:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         # Clamped to 1, score<5 → Tier 3
         assert result.score == 1
@@ -172,7 +165,6 @@ class TestScoreClamping:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         assert result.score == 1
 
@@ -182,7 +174,6 @@ class TestScoreClamping:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         assert result.score == 10
 
@@ -200,7 +191,6 @@ class TestTierConfidenceCoercion:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             # Should not raise ValidationError
             result = run_analyst(company, signals)
         assert result.tier in ("Tier 1", "Tier 2", "Tier 3")
@@ -211,9 +201,51 @@ class TestTierConfidenceCoercion:
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
         with patch("analyst.run_agent", side_effect=fake):
-            from analyst import run_analyst
             result = run_analyst(company, signals)
         assert result.confidence in ("high", "medium", "low")
+
+
+# ---------------------------------------------------------------------------
+# TestOutreachDraftFallback
+# ---------------------------------------------------------------------------
+
+class TestOutreachDraftFallback:
+    """run_analyst: malformed outreach dict falls back to empty OutreachDraft."""
+
+    def test_missing_body_field_returns_valid_icpscore(self):
+        """If record_assessment outreach is missing 'body', run_analyst must not raise."""
+        bad_outreach_assessment = {
+            **VALID_ASSESSMENT,
+            "outreach": {
+                "persona": "CFO",
+                "subject": "Test",
+                "first_line": "Hi there.",
+                # "body" intentionally omitted — should trigger fallback
+            },
+        }
+        company = _make_company()
+        signals = [_make_signal()]
+        fake = _make_fake_run_agent(bad_outreach_assessment)
+        with patch("analyst.run_agent", side_effect=fake):
+            result = run_analyst(company, signals)
+        assert isinstance(result, ICPScore)
+        assert isinstance(result.outreach, OutreachDraft)
+        # Fallback: all fields should be empty strings
+        assert result.outreach.persona == ""
+        assert result.outreach.subject == ""
+        assert result.outreach.first_line == ""
+        assert result.outreach.body == ""
+
+    def test_completely_missing_outreach_key_returns_valid_icpscore(self):
+        """If record_assessment provides no outreach key at all, run_analyst must not raise."""
+        no_outreach_assessment = {k: v for k, v in VALID_ASSESSMENT.items() if k != "outreach"}
+        company = _make_company()
+        signals = [_make_signal()]
+        fake = _make_fake_run_agent(no_outreach_assessment)
+        with patch("analyst.run_agent", side_effect=fake):
+            result = run_analyst(company, signals)
+        assert isinstance(result, ICPScore)
+        assert result.outreach.body == ""
 
 
 # ---------------------------------------------------------------------------
@@ -254,19 +286,16 @@ class TestApplyGuards:
     # -- No dated signals
 
     def test_no_dated_signals_forces_confidence_low(self):
-        from analyst import apply_guards
         score = self._make_score(confidence="high", needs_human_research=False)
         result = apply_guards(score, [self._undated_signal()])
         assert result.confidence == "low"
 
     def test_no_dated_signals_forces_needs_human_research_true(self):
-        from analyst import apply_guards
         score = self._make_score(needs_human_research=False)
         result = apply_guards(score, [self._undated_signal()])
         assert result.needs_human_research is True
 
     def test_no_signals_at_all_forces_confidence_low(self):
-        from analyst import apply_guards
         score = self._make_score(confidence="high")
         result = apply_guards(score, [])
         assert result.confidence == "low"
@@ -275,25 +304,21 @@ class TestApplyGuards:
     # -- Low confidence + high score is capped
 
     def test_low_confidence_score_7_capped_to_6(self):
-        from analyst import apply_guards
         score = self._make_score(score=7, confidence="low", tier="Tier 2", needs_human_research=True)
         result = apply_guards(score, [self._dated_signal()])
         assert result.score == 6
 
     def test_low_confidence_score_9_capped_to_6(self):
-        from analyst import apply_guards
         score = self._make_score(score=9, confidence="low", tier="Tier 1", needs_human_research=True)
         result = apply_guards(score, [self._dated_signal()])
         assert result.score == 6
 
     def test_low_confidence_score_6_not_capped(self):
-        from analyst import apply_guards
         score = self._make_score(score=6, confidence="low", tier="Tier 2", needs_human_research=True)
         result = apply_guards(score, [self._dated_signal()])
         assert result.score == 6  # unchanged
 
     def test_high_confidence_score_9_not_capped(self):
-        from analyst import apply_guards
         score = self._make_score(score=9, confidence="high", tier="Tier 1", needs_human_research=False)
         result = apply_guards(score, [self._dated_signal()])
         assert result.score == 9
@@ -301,37 +326,31 @@ class TestApplyGuards:
     # -- Tier assignment
 
     def test_score_8_not_needs_human_research_gives_tier1(self):
-        from analyst import apply_guards
         score = self._make_score(score=8, confidence="high", needs_human_research=False, tier="Tier 3")
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 1"
 
     def test_score_9_not_needs_human_research_gives_tier1(self):
-        from analyst import apply_guards
         score = self._make_score(score=9, confidence="high", needs_human_research=False, tier="Tier 3")
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 1"
 
     def test_score_5_gives_tier2(self):
-        from analyst import apply_guards
         score = self._make_score(score=5, confidence="high", needs_human_research=False, tier="Tier 1")
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 2"
 
     def test_score_7_not_needs_human_research_gives_tier2(self):
-        from analyst import apply_guards
         score = self._make_score(score=7, confidence="high", needs_human_research=False, tier="Tier 1")
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 2"
 
     def test_score_4_gives_tier3(self):
-        from analyst import apply_guards
         score = self._make_score(score=4, confidence="high", needs_human_research=False, tier="Tier 1")
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 3"
 
     def test_score_1_gives_tier3(self):
-        from analyst import apply_guards
         score = self._make_score(score=1, confidence="high", needs_human_research=False, tier="Tier 1")
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 3"
@@ -340,7 +359,6 @@ class TestApplyGuards:
 
     def test_needs_human_research_true_with_score_9_gives_tier2(self):
         """needs_human_research=True prevents Tier 1 assignment even with high score."""
-        from analyst import apply_guards
         score = self._make_score(score=9, confidence="high", needs_human_research=True, tier="Tier 1")
         result = apply_guards(score, [self._dated_signal()])
         # score>=8 but needs_human_research=True → elif score>=5 → Tier 2
@@ -348,7 +366,6 @@ class TestApplyGuards:
 
     def test_needs_human_research_with_no_dated_gives_tier2_not_tier1(self):
         """No dated signals → confidence=low, needs_human_research=True, score capped → Tier 2."""
-        from analyst import apply_guards
         score = self._make_score(score=9, confidence="high", needs_human_research=False, tier="Tier 1")
         result = apply_guards(score, [self._undated_signal()])
         # No dated → confidence=low, needs_human_research=True, score(9) capped to 6 → Tier 2
