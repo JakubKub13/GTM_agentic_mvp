@@ -66,3 +66,49 @@ class TestModuleDefaults:
         import config
         importlib.reload(config)
         assert config.LOG_LEVEL == "INFO"
+
+
+class TestAsyncKnobs:
+    """Tests for the async production knobs added in the async migration."""
+
+    def test_max_concurrent_accounts_exists_and_is_int(self):
+        """MAX_CONCURRENT_ACCOUNTS is present and is an int."""
+        import config
+        assert hasattr(config, "MAX_CONCURRENT_ACCOUNTS")
+        assert isinstance(config.MAX_CONCURRENT_ACCOUNTS, int)
+
+    def test_max_concurrent_accounts_default(self, monkeypatch):
+        """MAX_CONCURRENT_ACCOUNTS defaults to 5 when env var is absent."""
+        monkeypatch.delenv("MAX_CONCURRENT_ACCOUNTS", raising=False)
+        import importlib
+        import config
+        importlib.reload(config)
+        assert config.MAX_CONCURRENT_ACCOUNTS == 5
+
+    def test_http_timeout_seconds_exists_and_is_float(self):
+        """HTTP_TIMEOUT_SECONDS is present and is a float."""
+        import config
+        assert hasattr(config, "HTTP_TIMEOUT_SECONDS")
+        assert isinstance(config.HTTP_TIMEOUT_SECONDS, float)
+
+    def test_http_timeout_seconds_default(self, monkeypatch):
+        """HTTP_TIMEOUT_SECONDS defaults to 30.0 when env var is absent."""
+        monkeypatch.delenv("HTTP_TIMEOUT_SECONDS", raising=False)
+        import importlib
+        import config
+        importlib.reload(config)
+        assert config.HTTP_TIMEOUT_SECONDS == 30.0
+
+    def test_anthropic_timeout_seconds_exists_and_is_float(self):
+        """ANTHROPIC_TIMEOUT_SECONDS is present and is a float."""
+        import config
+        assert hasattr(config, "ANTHROPIC_TIMEOUT_SECONDS")
+        assert isinstance(config.ANTHROPIC_TIMEOUT_SECONDS, float)
+
+    def test_anthropic_timeout_seconds_default(self, monkeypatch):
+        """ANTHROPIC_TIMEOUT_SECONDS defaults to 120.0 when env var is absent."""
+        monkeypatch.delenv("ANTHROPIC_TIMEOUT_SECONDS", raising=False)
+        import importlib
+        import config
+        importlib.reload(config)
+        assert config.ANTHROPIC_TIMEOUT_SECONDS == 120.0
