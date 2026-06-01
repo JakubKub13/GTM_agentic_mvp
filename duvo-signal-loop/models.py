@@ -1,6 +1,7 @@
 """Pydantic models — the contract shared across all agents."""
 from __future__ import annotations
-from pydantic import BaseModel
+from typing import Literal
+from pydantic import BaseModel, Field
 
 
 class Company(BaseModel):
@@ -11,7 +12,7 @@ class Company(BaseModel):
 
 
 class Signal(BaseModel):
-    signal_type: str          # erp_migration | hiring | ma_leadership | pain
+    signal_type: Literal["erp_migration", "hiring", "ma_leadership", "pain"]
     title: str
     summary: str
     source_url: str
@@ -29,9 +30,9 @@ class OutreachDraft(BaseModel):
 class ICPScore(BaseModel):
     company_name: str
     domain: str
-    score: int                # 1-10
-    tier: str                 # Tier 1 | Tier 2 | Tier 3
-    confidence: str           # high | medium | low
+    score: int = Field(ge=1, le=10)
+    tier: Literal["Tier 1", "Tier 2", "Tier 3"]
+    confidence: Literal["high", "medium", "low"]
     why_fit: list[str]
     why_not: list[str]
     recommended_persona: str

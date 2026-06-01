@@ -42,6 +42,6 @@ def require(name: str, value: str) -> str:
         RuntimeError: When *value* is an empty string, with a message that includes
             *name* so the operator knows exactly which variable to fill in.
     """
-    if not value:
+    if not value.strip():
         raise RuntimeError(f"Missing required env var: {name}. Add it to .env")
     return value

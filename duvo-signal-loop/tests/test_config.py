@@ -26,6 +26,13 @@ class TestRequireHelper:
         with pytest.raises(RuntimeError, match="MY_MISSING_VAR"):
             require("MY_MISSING_VAR", "")
 
+    def test_require_raises_runtime_error_for_whitespace_only_value(self):
+        """require() rejects whitespace-only values (not just empty string)."""
+        from config import require
+
+        with pytest.raises(RuntimeError):
+            require("MY_VAR", "   ")
+
 
 class TestModuleDefaults:
     """Tests for module-level config defaults."""

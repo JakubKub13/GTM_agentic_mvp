@@ -60,6 +60,22 @@ class TestSignal:
         )
         assert s.relevance == ""
 
+    def test_all_valid_signal_types_accepted(self):
+        """Each valid Literal value constructs without error."""
+        from models import Signal
+
+        valid_types = ["erp_migration", "hiring", "ma_leadership", "pain"]
+        for st in valid_types:
+            s = Signal(signal_type=st, title="t", summary="s", source_url="u")
+            assert s.signal_type == st
+
+    def test_invalid_signal_type_raises_validation_error(self):
+        """An out-of-contract signal_type must raise ValidationError."""
+        from models import Signal
+
+        with pytest.raises(ValidationError):
+            Signal(signal_type="unknown_type", title="t", summary="s", source_url="u")
+
 
 class TestOutreachDraft:
     def test_construction_with_all_fields(self):
@@ -149,13 +165,135 @@ class TestICPScore:
                 outreach=self._make_outreach(),
             )
 
+    def test_score_below_range_raises_validation_error(self):
+        """score=0 is below the 1-10 constraint and must raise ValidationError."""
+        from models import ICPScore
+
+        with pytest.raises(ValidationError):
+            ICPScore(
+                company_name="X",
+                domain="x.com",
+                score=0,
+                tier="Tier 1",
+                confidence="high",
+                why_fit=[],
+                why_not=[],
+                recommended_persona="AE",
+                recommended_angle="Growth",
+                reasoning="OK",
+                needs_human_research=False,
+                outreach=self._make_outreach(),
+            )
+
+    def test_score_above_range_raises_validation_error(self):
+        """score=11 is above the 1-10 constraint and must raise ValidationError."""
+        from models import ICPScore
+
+        with pytest.raises(ValidationError):
+            ICPScore(
+                company_name="X",
+                domain="x.com",
+                score=11,
+                tier="Tier 1",
+                confidence="high",
+                why_fit=[],
+                why_not=[],
+                recommended_persona="AE",
+                recommended_angle="Growth",
+                reasoning="OK",
+                needs_human_research=False,
+                outreach=self._make_outreach(),
+            )
+
+    def test_invalid_tier_raises_validation_error(self):
+        """A tier value outside the Literal raises ValidationError."""
+        from models import ICPScore
+
+        with pytest.raises(ValidationError):
+            ICPScore(
+                company_name="X",
+                domain="x.com",
+                score=5,
+                tier="Tier 4",
+                confidence="high",
+                why_fit=[],
+                why_not=[],
+                recommended_persona="AE",
+                recommended_angle="Growth",
+                reasoning="OK",
+                needs_human_research=False,
+                outreach=self._make_outreach(),
+            )
+
+    def test_invalid_confidence_raises_validation_error(self):
+        """A confidence value outside the Literal raises ValidationError."""
+        from models import ICPScore
+
+        with pytest.raises(ValidationError):
+            ICPScore(
+                company_name="X",
+                domain="x.com",
+                score=5,
+                tier="Tier 1",
+                confidence="certain",
+                why_fit=[],
+                why_not=[],
+                recommended_persona="AE",
+                recommended_angle="Growth",
+                reasoning="OK",
+                needs_human_research=False,
+                outreach=self._make_outreach(),
+            )
+
+    def test_all_valid_tiers_accepted(self):
+        """Each valid tier Literal constructs without error."""
+        from models import ICPScore
+
+        for tier in ["Tier 1", "Tier 2", "Tier 3"]:
+            score = ICPScore(
+                company_name="X",
+                domain="x.com",
+                score=5,
+                tier=tier,
+                confidence="medium",
+                why_fit=[],
+                why_not=[],
+                recommended_persona="AE",
+                recommended_angle="Growth",
+                reasoning="OK",
+                needs_human_research=False,
+                outreach=self._make_outreach(),
+            )
+            assert score.tier == tier
+
+    def test_all_valid_confidences_accepted(self):
+        """Each valid confidence Literal constructs without error."""
+        from models import ICPScore
+
+        for conf in ["high", "medium", "low"]:
+            score = ICPScore(
+                company_name="X",
+                domain="x.com",
+                score=5,
+                tier="Tier 2",
+                confidence=conf,
+                why_fit=[],
+                why_not=[],
+                recommended_persona="AE",
+                recommended_angle="Growth",
+                reasoning="OK",
+                needs_human_research=False,
+                outreach=self._make_outreach(),
+            )
+            assert score.confidence == conf
+
 
 class TestRunResult:
     def _make_score(self):
         from models import ICPScore, OutreachDraft
         return ICPScore(
-            company_name="X",
-            domain="x.com",
+            company_name="Rohlik",
+            domain="rohlik.cz",
             score=5,
             tier="Tier 2",
             confidence="medium",
@@ -177,7 +315,8 @@ class TestRunResult:
         from models import RunResult
 
         r = RunResult(score=self._make_score(), signals=[])
-        assert r.score is not None
+        # Real value round-trip assertion instead of tautological 'is not None'.
+        assert r.score.company_name == "Rohlik"
         assert r.signals == []
 
     def test_default_statuses_are_skipped(self):

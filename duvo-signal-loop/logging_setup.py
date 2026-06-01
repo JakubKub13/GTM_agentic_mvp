@@ -17,24 +17,57 @@ import config
 _ROOT_LOGGER_NAME = "duvo"
 
 
+def _resolve_level(level: str) -> int:
+    """Resolve a level string to an int, falling back to INFO for unknown names.
+
+    Uses ``logging.getLevelNamesMapping()`` (Python 3.11+) when available;
+    otherwise falls back to checking ``logging.getLevelName()``.
+
+    Args:
+        level: A log-level name such as ``"DEBUG"`` or ``"INFO"``.
+
+    Returns:
+        The corresponding :mod:`logging` integer level, or ``logging.INFO``
+        when *level* is not a recognised name.
+    """
+    # getLevelNamesMapping is available on Python 3.11+.
+    if hasattr(logging, "getLevelNamesMapping"):
+        mapping = logging.getLevelNamesMapping()
+        if level.upper() in mapping:
+            return mapping[level.upper()]
+    else:
+        # Fallback for older Python: getLevelName returns an int for known names.
+        result = logging.getLevelName(level.upper())
+        if isinstance(result, int):
+            return result
+
+    return logging.INFO
+
+
 def configure_logging(level: str | None = None) -> None:
     """Configure the root ``duvo`` logger with a readable format.
 
     This function is idempotent — calling it more than once does **not** attach
     duplicate handlers.  It is safe to call at module import time.
 
+    Unknown level strings fall back to ``"INFO"`` rather than silently producing
+    ``NOTSET`` (0).
+
     Args:
         level: A log-level string such as ``"DEBUG"``, ``"INFO"``, or
             ``"WARNING"``.  When *None* (the default) the value of
             ``config.LOG_LEVEL`` is used, which itself falls back to ``"INFO"``.
     """
-    resolved_level = level if level is not None else config.LOG_LEVEL
+    raw_level = level if level is not None else config.LOG_LEVEL
+    resolved_level = _resolve_level(raw_level)
     duvo_logger = logging.getLogger(_ROOT_LOGGER_NAME)
 
     # Idempotency guard — do not add a second handler if we already have one.
+    # Still apply the (possibly new) level to both the logger and its handler.
     if duvo_logger.handlers:
-        # Still apply the (possibly new) level in case it was requested explicitly.
         duvo_logger.setLevel(resolved_level)
+        for handler in duvo_logger.handlers:
+            handler.setLevel(resolved_level)
         return
 
     duvo_logger.setLevel(resolved_level)
@@ -57,6 +90,10 @@ def configure_logging(level: str | None = None) -> None:
 def get_logger(name: str) -> logging.Logger:
     """Return a child logger under the ``duvo`` namespace.
 
+    If the ``duvo`` parent logger has no handlers yet, ``configure_logging()``
+    is called automatically so that logging always works even when the caller
+    has never explicitly configured it.
+
     Args:
         name: Typically ``__name__`` of the calling module.  The resulting
             logger will be named ``duvo.<name>``.
@@ -65,4 +102,7 @@ def get_logger(name: str) -> logging.Logger:
         A :class:`logging.Logger` instance whose effective level and handlers
         are inherited from the ``duvo`` parent logger.
     """
+    duvo_logger = logging.getLogger(_ROOT_LOGGER_NAME)
+    if not duvo_logger.handlers:
+        configure_logging()
     return logging.getLogger(f"{_ROOT_LOGGER_NAME}.{name}")
