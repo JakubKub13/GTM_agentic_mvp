@@ -1,6 +1,7 @@
-"""Tests for agent_core.py — the reusable Anthropic tool-use loop."""
+"""Tests for agent_core.py — the reusable Anthropic tool-use loop (async)."""
+import inspect
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
@@ -27,24 +28,25 @@ def _make_response(content):
 
 @pytest.fixture()
 def fake_client():
-    """A fake Anthropic client whose messages.create can be configured per test."""
+    """A fake AsyncAnthropic client whose messages.create is an AsyncMock."""
     client = MagicMock()
+    client.messages.create = AsyncMock()
     return client
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# Tests — No Tools
 # ---------------------------------------------------------------------------
 
 class TestRunAgentNoTools:
     """When the model returns no tool_use blocks, the loop returns immediately."""
 
-    def test_returns_messages_on_first_text_response(self, fake_client):
+    async def test_returns_messages_on_first_text_response(self, fake_client):
         fake_client.messages.create.return_value = _make_response([_make_text_block("hello")])
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            messages = run_agent(
+            messages = await run_agent(
                 system="sys",
                 user="hi",
                 tools=[],
@@ -57,21 +59,25 @@ class TestRunAgentNoTools:
         roles = [m["role"] for m in messages]
         assert roles == ["user", "assistant"]
 
-    def test_messages_list_starts_with_user_message(self, fake_client):
+    async def test_messages_list_starts_with_user_message(self, fake_client):
         fake_client.messages.create.return_value = _make_response([_make_text_block()])
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            messages = run_agent("sys", "user prompt", [], {})
+            messages = await run_agent("sys", "user prompt", [], {})
 
         assert messages[0]["role"] == "user"
         assert messages[0]["content"] == "user prompt"
 
 
+# ---------------------------------------------------------------------------
+# Tests — Tool Execution
+# ---------------------------------------------------------------------------
+
 class TestRunAgentToolExecution:
     """Tool calls are dispatched, results fed back, and the loop continues."""
 
-    def test_tool_call_then_final_text_returns_full_transcript(self, fake_client):
+    async def test_tool_call_then_final_text_returns_full_transcript(self, fake_client):
         tool_block = _make_tool_use_block("my_tool", {"x": 1}, "tu-a")
         fake_client.messages.create.side_effect = [
             _make_response([tool_block]),
@@ -86,7 +92,7 @@ class TestRunAgentToolExecution:
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            messages = run_agent(
+            messages = await run_agent(
                 system="sys",
                 user="go",
                 tools=[],
@@ -95,7 +101,7 @@ class TestRunAgentToolExecution:
 
         assert fake_client.messages.create.call_count == 2
         assert impl_called_with["x"] == 1
-        # The tool result should appear somewhere in messages (content items are dicts with "type")
+        # The tool result should appear somewhere in messages
         tool_result_msgs = [
             m for m in messages
             if isinstance(m.get("content"), list)
@@ -104,7 +110,7 @@ class TestRunAgentToolExecution:
         ]
         assert len(tool_result_msgs) == 1
 
-    def test_log_captures_tool_call_entries(self, fake_client):
+    async def test_log_captures_tool_call_entries(self, fake_client):
         tool_block = _make_tool_use_block("search", {"query": "test"}, "tu-b")
         fake_client.messages.create.side_effect = [
             _make_response([tool_block]),
@@ -114,12 +120,12 @@ class TestRunAgentToolExecution:
         agent_log = []
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            run_agent("sys", "go", [], impls={"search": lambda query: "r"}, log=agent_log)
+            await run_agent("sys", "go", [], impls={"search": lambda query: "r"}, log=agent_log)
 
         assert len(agent_log) == 1
         assert "search" in agent_log[0]
 
-    def test_log_is_none_by_default_no_error(self, fake_client):
+    async def test_log_is_none_by_default_no_error(self, fake_client):
         tool_block = _make_tool_use_block("t", {}, "tu-c")
         fake_client.messages.create.side_effect = [
             _make_response([tool_block]),
@@ -129,19 +135,128 @@ class TestRunAgentToolExecution:
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
             # Should not raise
-            run_agent("sys", "go", [], impls={"t": lambda: "ok"})
+            await run_agent("sys", "go", [], impls={"t": lambda: "ok"})
 
+    async def test_sync_tool_impl_works(self, fake_client):
+        """A synchronous tool impl is called directly and its result is fed back."""
+        tool_block = _make_tool_use_block("sync_tool", {"val": "hello"}, "tu-sync")
+        fake_client.messages.create.side_effect = [
+            _make_response([tool_block]),
+            _make_response([_make_text_block("done")]),
+        ]
+
+        called = {}
+
+        def sync_tool(val):
+            called["val"] = val
+            return "sync-result"
+
+        with patch("agent_core._get_client", return_value=fake_client):
+            from agent_core import run_agent
+            messages = await run_agent("sys", "go", [], impls={"sync_tool": sync_tool})
+
+        assert called["val"] == "hello"
+        tool_result_turns = [
+            m for m in messages
+            if isinstance(m.get("content"), list)
+            and any(isinstance(r, dict) and r.get("type") == "tool_result" for r in m["content"])
+        ]
+        assert tool_result_turns
+        assert "sync-result" in tool_result_turns[0]["content"][0]["content"]
+
+    async def test_async_tool_impl_is_awaited(self, fake_client):
+        """An async tool impl (coroutine) is awaited and its result is fed back."""
+        tool_block = _make_tool_use_block("async_tool", {"val": "world"}, "tu-async")
+        fake_client.messages.create.side_effect = [
+            _make_response([tool_block]),
+            _make_response([_make_text_block("done")]),
+        ]
+
+        called = {}
+
+        async def async_tool(val):
+            called["val"] = val
+            return "async-result"
+
+        with patch("agent_core._get_client", return_value=fake_client):
+            from agent_core import run_agent
+            messages = await run_agent("sys", "go", [], impls={"async_tool": async_tool})
+
+        assert called["val"] == "world"
+        tool_result_turns = [
+            m for m in messages
+            if isinstance(m.get("content"), list)
+            and any(isinstance(r, dict) and r.get("type") == "tool_result" for r in m["content"])
+        ]
+        assert tool_result_turns
+        assert "async-result" in tool_result_turns[0]["content"][0]["content"]
+
+    async def test_sync_tool_returning_falsy_none_is_not_awaited(self, fake_client):
+        """A sync impl returning None (falsy) is NOT awaited; str(None)=='None' is fed back."""
+        tool_block = _make_tool_use_block("none_tool", {}, "tu-none")
+        fake_client.messages.create.side_effect = [
+            _make_response([tool_block]),
+            _make_response([_make_text_block("done")]),
+        ]
+
+        def none_tool():
+            return None
+
+        with patch("agent_core._get_client", return_value=fake_client):
+            from agent_core import run_agent
+            messages = await run_agent("sys", "go", [], impls={"none_tool": none_tool})
+
+        tool_result_turns = [
+            m for m in messages
+            if isinstance(m.get("content"), list)
+            and any(isinstance(r, dict) and r.get("type") == "tool_result" for r in m["content"])
+        ]
+        assert tool_result_turns, "Expected a tool_result turn in messages"
+        result_content = tool_result_turns[0]["content"][0]["content"]
+        # None is falsy but must not be awaited; str(None) == "None"
+        assert result_content == "None"
+        # Sanity: inspect.isawaitable(None) is False — no await attempted
+        assert not inspect.isawaitable(None)
+
+    async def test_sync_tool_returning_falsy_zero_is_not_awaited(self, fake_client):
+        """A sync impl returning 0 (falsy) is NOT awaited; str(0)=='0' is fed back."""
+        tool_block = _make_tool_use_block("zero_tool", {}, "tu-zero")
+        fake_client.messages.create.side_effect = [
+            _make_response([tool_block]),
+            _make_response([_make_text_block("done")]),
+        ]
+
+        def zero_tool():
+            return 0
+
+        with patch("agent_core._get_client", return_value=fake_client):
+            from agent_core import run_agent
+            messages = await run_agent("sys", "go", [], impls={"zero_tool": zero_tool})
+
+        tool_result_turns = [
+            m for m in messages
+            if isinstance(m.get("content"), list)
+            and any(isinstance(r, dict) and r.get("type") == "tool_result" for r in m["content"])
+        ]
+        assert tool_result_turns, "Expected a tool_result turn in messages"
+        result_content = tool_result_turns[0]["content"][0]["content"]
+        assert result_content == "0"
+
+
+# ---------------------------------------------------------------------------
+# Tests — Final Tools
+# ---------------------------------------------------------------------------
 
 class TestRunAgentFinalTools:
     """Reaching a final tool causes an immediate return without waiting for the next model call."""
 
-    def test_final_tool_stops_loop(self, fake_client):
+    async def test_final_tool_stops_loop(self, fake_client):
         final_block = _make_tool_use_block("finish", {"result": "done"}, "tu-f")
         fake_client.messages.create.return_value = _make_response([final_block])
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            messages = run_agent(
+            messages = await run_agent(
                 system="sys",
                 user="go",
                 tools=[],
@@ -154,7 +269,7 @@ class TestRunAgentFinalTools:
         # Messages should include the tool result turn
         assert len(messages) >= 3  # user, assistant, tool_result
 
-    def test_non_final_tool_does_not_stop_loop(self, fake_client):
+    async def test_non_final_tool_does_not_stop_loop(self, fake_client):
         regular_block = _make_tool_use_block("regular", {}, "tu-r")
         final_block = _make_tool_use_block("finish", {}, "tu-f2")
         fake_client.messages.create.side_effect = [
@@ -165,7 +280,7 @@ class TestRunAgentFinalTools:
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            run_agent(
+            await run_agent(
                 system="sys",
                 user="go",
                 tools=[],
@@ -177,10 +292,14 @@ class TestRunAgentFinalTools:
         assert fake_client.messages.create.call_count == 2
 
 
+# ---------------------------------------------------------------------------
+# Tests — Tool Error
+# ---------------------------------------------------------------------------
+
 class TestRunAgentToolError:
     """When a tool impl raises, the error is caught and fed back as a tool_result."""
 
-    def test_tool_error_is_caught_and_fed_back(self, fake_client):
+    async def test_tool_error_is_caught_and_fed_back(self, fake_client):
         tool_block = _make_tool_use_block("bad_tool", {}, "tu-e")
         fake_client.messages.create.side_effect = [
             _make_response([tool_block]),
@@ -192,12 +311,12 @@ class TestRunAgentToolError:
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            messages = run_agent("sys", "go", [], impls={"bad_tool": bad_tool})
+            messages = await run_agent("sys", "go", [], impls={"bad_tool": bad_tool})
 
         # Loop must continue (two create calls)
         assert fake_client.messages.create.call_count == 2
 
-        # The error text must appear in the tool_result content (content items are dicts)
+        # The error text must appear in the tool_result content
         tool_result_turns = [
             m for m in messages
             if isinstance(m.get("content"), list)
@@ -209,7 +328,7 @@ class TestRunAgentToolError:
         assert "tool error:" in result_content
         assert "something went wrong" in result_content
 
-    def test_tool_error_does_not_stop_loop(self, fake_client):
+    async def test_tool_error_does_not_stop_loop(self, fake_client):
         """An erroring tool is not treated as a final tool."""
         tool_block = _make_tool_use_block("fail", {}, "tu-fail")
         fake_client.messages.create.side_effect = [
@@ -219,40 +338,48 @@ class TestRunAgentToolError:
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            msgs = run_agent("sys", "go", [], impls={"fail": lambda: (_ for _ in ()).throw(RuntimeError("boom"))})
+            msgs = await run_agent("sys", "go", [], impls={"fail": lambda: (_ for _ in ()).throw(RuntimeError("boom"))})
 
         assert fake_client.messages.create.call_count == 2
 
 
+# ---------------------------------------------------------------------------
+# Tests — Max Turns
+# ---------------------------------------------------------------------------
+
 class TestRunAgentMaxTurns:
     """max_turns caps the number of model calls."""
 
-    def test_max_turns_respected(self, fake_client):
+    async def test_max_turns_respected(self, fake_client):
         # Always return a tool_use so the loop would run forever without the cap
         tool_block = _make_tool_use_block("loop_tool", {}, "tu-loop")
         fake_client.messages.create.return_value = _make_response([tool_block])
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            run_agent("sys", "go", [], impls={"loop_tool": lambda: "x"}, max_turns=3)
+            await run_agent("sys", "go", [], impls={"loop_tool": lambda: "x"}, max_turns=3)
 
         assert fake_client.messages.create.call_count == 3
 
-    def test_max_turns_default_is_8(self, fake_client):
+    async def test_max_turns_default_is_8(self, fake_client):
         tool_block = _make_tool_use_block("loop_tool", {}, "tu-loop2")
         fake_client.messages.create.return_value = _make_response([tool_block])
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            run_agent("sys", "go", [], impls={"loop_tool": lambda: "x"})
+            await run_agent("sys", "go", [], impls={"loop_tool": lambda: "x"})
 
         assert fake_client.messages.create.call_count == 8
 
 
+# ---------------------------------------------------------------------------
+# Tests — Unknown Tool
+# ---------------------------------------------------------------------------
+
 class TestRunAgentUnknownTool:
     """When the model calls a tool name not in impls, the loop handles it gracefully."""
 
-    def test_unknown_tool_does_not_crash(self, fake_client):
+    async def test_unknown_tool_does_not_crash(self, fake_client):
         unknown_block = _make_tool_use_block("ghost_tool", {"x": 1}, "tu-ghost")
         fake_client.messages.create.side_effect = [
             _make_response([unknown_block]),
@@ -262,12 +389,12 @@ class TestRunAgentUnknownTool:
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
             # Must not raise
-            messages = run_agent("sys", "go", [], impls={})
+            messages = await run_agent("sys", "go", [], impls={})
 
         # Loop should continue and terminate normally (two create calls)
         assert fake_client.messages.create.call_count == 2
 
-    def test_unknown_tool_result_content_is_clearly_labelled(self, fake_client):
+    async def test_unknown_tool_result_content_is_clearly_labelled(self, fake_client):
         unknown_block = _make_tool_use_block("ghost_tool", {"x": 1}, "tu-ghost2")
         fake_client.messages.create.side_effect = [
             _make_response([unknown_block]),
@@ -276,7 +403,7 @@ class TestRunAgentUnknownTool:
 
         with patch("agent_core._get_client", return_value=fake_client):
             from agent_core import run_agent
-            messages = run_agent("sys", "go", [], impls={})
+            messages = await run_agent("sys", "go", [], impls={})
 
         # Find tool_result turns
         tool_result_turns = [
@@ -288,6 +415,10 @@ class TestRunAgentUnknownTool:
         result_content = tool_result_turns[0]["content"][0]["content"]
         assert result_content == "unknown tool: ghost_tool"
 
+
+# ---------------------------------------------------------------------------
+# Tests — _short helper (sync, unchanged)
+# ---------------------------------------------------------------------------
 
 class TestShortHelper:
     """_short() truncates long dict values and joins items."""
