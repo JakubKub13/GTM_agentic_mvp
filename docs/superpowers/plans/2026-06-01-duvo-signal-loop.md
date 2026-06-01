@@ -36,9 +36,11 @@ duvo-signal-loop/
 ├── analyst.py               # analyst agent + apply_guards (T0)
 ├── writeback/
 │   ├── __init__.py
-│   ├── hubspot.py           # T0
-│   ├── slack.py             # T1
-│   └── lemlist.py           # T2
+│   ├── crm.py              # CRM dispatcher: attio|hubspot by CRM_PROVIDER (T0)
+│   ├── attio.py            # Attio CRM write-back (T0, default)
+│   ├── hubspot.py          # HubSpot adapter, same interface (optional)
+│   ├── slack.py            # T1
+│   └── lemlist.py          # T2
 ├── router.py                # router agent; write-backs as tools (T0 minimal → T1 → T2)
 ├── reporter.py              # HTML audit log (T0)
 ├── templates/report.html    # T0
@@ -50,9 +52,11 @@ duvo-signal-loop/
 
 ## Pre-build setup (do once, ~10 min, manual)
 
-1. **HubSpot:** free developer account → Settings → Integrations → Private Apps → create app with
-   scopes `crm.objects.companies.read/write`, `crm.objects.contacts.read/write`,
-   `crm.objects.notes.read/write`, `crm.schemas.companies.read/write`. Copy the token.
+1. **Attio (default CRM):** sign up at https://app.attio.com (Google/email, frictionless) →
+   Workspace Settings → Developers → Create a new integration → generate an access token (Bearer).
+   Free plan includes API access. Put it in `ATTIO_API_KEY`, keep `CRM_PROVIDER=attio`.
+   (Optional: to target Duvo's real HubSpot instead, set `CRM_PROVIDER=hubspot` + `HUBSPOT_TOKEN`
+   from a private app in a HubSpot CRM portal — see `.env.example`.)
 2. **Slack:** Incoming Webhook for #sales. Copy URL.
 3. **lemlist:** create ONE campaign, leave it **paused**, copy its campaign id and the API key.
 4. **Exa + Anthropic:** copy both keys.
@@ -82,10 +86,12 @@ python-dotenv>=1.0
 requests>=2.31
 ```
 
-`.env.example`:
+`.env.example`: (full documented version already written to `duvo-signal-loop/.env.example`; keys:)
 ```
 EXA_API_KEY=
 ANTHROPIC_API_KEY=
+CRM_PROVIDER=attio
+ATTIO_API_KEY=
 HUBSPOT_TOKEN=
 SLACK_WEBHOOK_URL=
 LEMLIST_API_KEY=
@@ -138,6 +144,8 @@ load_dotenv()
 
 EXA_API_KEY = os.environ.get("EXA_API_KEY", "")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+CRM_PROVIDER = os.environ.get("CRM_PROVIDER", "attio")  # "attio" (default) | "hubspot"
+ATTIO_API_KEY = os.environ.get("ATTIO_API_KEY", "")
 HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
 LEMLIST_API_KEY = os.environ.get("LEMLIST_API_KEY", "")
@@ -209,7 +217,7 @@ class ICPScore(BaseModel):
 class RunResult(BaseModel):
     score: ICPScore
     signals: list[Signal]
-    hubspot_status: str = "skipped"
+    crm_status: str = "skipped"
     slack_status: str = "skipped"
     lemlist_status: str = "skipped"
     agent_log: list[str] = []   # tool calls each agent made, for the report
@@ -602,12 +610,96 @@ Expected: Rohlik higher tier/confidence; the bakery low/Tier 3, `needs_human_res
 
 ---
 
-## Task 7: writeback/hubspot.py (T0)
+## Task 7: CRM write-back — crm dispatcher + Attio (T0)  [HubSpot adapter optional]
 
-**Files:** Create `writeback/hubspot.py`
+**Files:** Create `writeback/crm.py`, `writeback/attio.py`. (Optional adapter `writeback/hubspot.py` below.)
 
+The router calls ONE interface — `crm.upsert_account(score)` — and the dispatcher routes to Attio
+(default) or HubSpot by `CRM_PROVIDER`. Each provider creates a company record + an evidence note
+labeled "AI-suggested". The ICP score rides in the note title so it is visible without provisioning
+a custom field (promoting it to a structured attribute is a documented next step).
+
+`writeback/crm.py`:
 ```python
-"""Deterministic, self-contained HubSpot write-back: custom property + upsert + evidence note."""
+"""CRM dispatcher — the single interface the router uses; provider chosen by CRM_PROVIDER."""
+from config import CRM_PROVIDER
+from models import ICPScore
+
+
+def upsert_account(score: ICPScore) -> str:
+    if CRM_PROVIDER == "hubspot":
+        from writeback import hubspot
+        return hubspot.upsert_account(score)
+    from writeback import attio
+    return attio.upsert_account(score)
+```
+
+`writeback/attio.py` (endpoints verified: `POST /v2/objects/companies/records`, `POST /v2/notes`):
+```python
+"""Attio CRM write-back: create a company record + an evidence note (AI-suggested)."""
+import requests
+
+from config import ATTIO_API_KEY, require
+from models import ICPScore
+
+_BASE = "https://api.attio.com/v2"
+
+
+def _headers() -> dict:
+    return {"Authorization": f"Bearer {require('ATTIO_API_KEY', ATTIO_API_KEY)}",
+            "Content-Type": "application/json"}
+
+
+def _note_body(score: ICPScore) -> str:
+    lines = [
+        "AI-SUGGESTED — review before outreach.",
+        f"ICP score: {score.score}/10 ({score.tier}), confidence {score.confidence}.",
+        f"Persona: {score.recommended_persona}",
+        f"Angle: {score.recommended_angle}",
+        "", "Why fit: " + "; ".join(score.why_fit),
+        "Why not: " + "; ".join(score.why_not),
+        "", "Reasoning: " + score.reasoning,
+        "", "Drafted opener: " + score.outreach.first_line,
+    ]
+    if score.needs_human_research:
+        lines.insert(1, ">> FLAGGED: signals too thin — human research needed before contact.")
+    return "\n".join(lines)
+
+
+def _create_company(score: ICPScore) -> str:
+    url = f"{_BASE}/objects/companies/records"
+    # try with domains; if Attio rejects that value shape, retry with name only
+    last = None
+    for values in ({"name": score.company_name, "domains": [score.domain]},
+                   {"name": score.company_name}):
+        last = requests.post(url, headers=_headers(), json={"data": {"values": values}})
+        if last.status_code < 300:
+            return last.json()["data"]["id"]["record_id"]
+    last.raise_for_status()  # surface the last error
+    return ""
+
+
+def _create_note(score: ICPScore, record_id: str) -> None:
+    payload = {"data": {
+        "parent_object": "companies",
+        "parent_record_id": record_id,
+        "title": f"ICP {score.score}/10 ({score.tier}) — AI-suggested, review before outreach",
+        "format": "plaintext",
+        "content": _note_body(score),
+    }}
+    requests.post(f"{_BASE}/notes", headers=_headers(), json=payload).raise_for_status()
+
+
+def upsert_account(score: ICPScore) -> str:
+    record_id = _create_company(score)
+    _create_note(score, record_id)
+    return f"attio company {record_id} (ICP {score.score}) + evidence note"
+```
+
+**Optional — `writeback/hubspot.py`** (same `upsert_account(score) -> str` interface; only used when
+`CRM_PROVIDER=hubspot`. Skip during the demo if you have no HubSpot portal):
+```python
+"""HubSpot adapter: custom property + upsert company + evidence note. Same interface as attio."""
 import time
 import requests
 
@@ -684,20 +776,24 @@ def upsert_account(score: ICPScore) -> str:
     return f"company {cid} (icp_score={score.score}) + evidence note"
 ```
 
-**Verify:**
+**Verify (Attio, the default):**
 ```bash
 python -c "
 from models import Company
 from scouts import scout_all
 from analyst import run_analyst
-from writeback import hubspot
+from writeback import crm
 c = Company(name='Rohlik Group', domain='rohlik.cz', country='CZ', description='Online grocery CEE')
-print(hubspot.upsert_account(run_analyst(c, scout_all(c))))
+print(crm.upsert_account(run_analyst(c, scout_all(c))))
 "
 ```
-Expected: `company <id> (icp_score=...) + evidence note`; confirm in HubSpot UI.
+Expected: `attio company <uuid> (ICP ...) + evidence note`; confirm the company + note in Attio.
 
-**Commit:** `git add writeback/hubspot.py && git commit -m "feat: HubSpot write-back"`
+**Commit:**
+```bash
+git add writeback/crm.py writeback/attio.py writeback/hubspot.py
+git commit -m "feat: pluggable CRM write-back (Attio default, HubSpot adapter)"
+```
 
 ---
 
@@ -706,30 +802,31 @@ Expected: `company <id> (icp_score=...) + evidence note`; confirm in HubSpot UI.
 **Files:** Create `router.py`
 
 The router is an agent whose tools are the write-backs. Build the FULL version now: all four tools
-(`hubspot_upsert`, `slack_alert`, `lemlist_queue`, `finish`) are always registered, and the
+(`crm_upsert`, `slack_alert`, `lemlist_queue`, `finish`) are always registered, and the
 Slack/lemlist modules are imported **lazily inside their tool functions**. So in T0 — before
 `writeback/slack.py` and `writeback/lemlist.py` exist — a confident Tier 1 that triggers
 `slack_alert` raises `ImportError`, which `run_agent` catches and feeds back as `tool error: ...`;
 the run still completes. Once T1/T2 add those files, the same router lights up with no code change.
-Every tool also self-guards (refuses non-confident-Tier-1) and respects `dry_run`.
+`crm_upsert` calls the CRM dispatcher, so it targets Attio or HubSpot per `CRM_PROVIDER` with no
+router change. Every tool also self-guards (refuses non-confident-Tier-1) and respects `dry_run`.
 
 ```python
 """Router agent: decides how to action a scored account; its tools are the write-backs."""
 import json
 
-from config import TEST_EMAIL
+from config import TEST_EMAIL, CRM_PROVIDER
 from models import RunResult
 from agent_core import run_agent
-from writeback import hubspot
+from writeback import crm
 
 ROUTER_SYSTEM = (
     "You are Duvo's GTM routing agent. You decide how to action one scored account into the "
     "sales stack. Rules:\n"
-    "- ALWAYS call hubspot_upsert to log the account with its evidence note.\n"
+    "- ALWAYS call crm_upsert to log the account in the CRM with its evidence note.\n"
     "- If the account is a CONFIDENT Tier 1 (tier == 'Tier 1' and needs_human_research is false), "
     "also call slack_alert and lemlist_queue (queues a PAUSED draft a rep approves — never sent "
     "automatically).\n"
-    "- If it is flagged needs_human_research, or not Tier 1, ONLY call hubspot_upsert.\n"
+    "- If it is flagged needs_human_research, or not Tier 1, ONLY call crm_upsert.\n"
     "Call finish when done. Some tools may refuse if their own safety check fails — that is "
     "expected; do not retry a refused tool."
 )
@@ -744,12 +841,12 @@ def run_router(rr: RunResult, dry_run: bool, test_email: str = TEST_EMAIL, log=N
     s = rr.score
     confident_t1 = (s.tier == "Tier 1" and not s.needs_human_research)
 
-    def hubspot_upsert():
+    def crm_upsert():
         if dry_run:
-            rr.hubspot_status = f"[dry-run] upsert + note (icp_score={s.score})"
+            rr.crm_status = f"[dry-run] upsert account + note into {CRM_PROVIDER} (ICP {s.score})"
         else:
-            rr.hubspot_status = hubspot.upsert_account(s)
-        return rr.hubspot_status
+            rr.crm_status = crm.upsert_account(s)
+        return rr.crm_status
 
     def slack_alert():
         if not confident_t1:
@@ -775,14 +872,14 @@ def run_router(rr: RunResult, dry_run: bool, test_email: str = TEST_EMAIL, log=N
         return "done"
 
     tools = [
-        _tool_schema("hubspot_upsert", "Log the company in HubSpot with its ICP score and an "
-                                       "evidence note. Always allowed."),
+        _tool_schema("crm_upsert", "Log the company in the CRM with its ICP score and an "
+                                   "evidence note. Always allowed."),
         _tool_schema("slack_alert", "Post a Tier-1 alert to #sales. Only for confident Tier 1."),
         _tool_schema("lemlist_queue", "Queue the lead into a PAUSED lemlist draft for rep "
                                       "approval. Only for confident Tier 1."),
         _tool_schema("finish", "Call when routing is complete."),
     ]
-    impls = {"hubspot_upsert": hubspot_upsert, "slack_alert": slack_alert,
+    impls = {"crm_upsert": crm_upsert, "slack_alert": slack_alert,
              "lemlist_queue": lemlist_queue, "finish": finish}
 
     user = json.dumps({
@@ -806,10 +903,10 @@ c = Company(name='Rohlik Group', domain='rohlik.cz', country='CZ', description='
 score = run_analyst(c, scout_all(c)); rr = RunResult(score=score, signals=[])
 log=[]; run_router(rr, dry_run=True, log=log)
 print('decisions:', log)
-print('hubspot:', rr.hubspot_status, '| slack:', rr.slack_status, '| lemlist:', rr.lemlist_status)
+print('crm:', rr.crm_status, '| slack:', rr.slack_status, '| lemlist:', rr.lemlist_status)
 "
 ```
-Expected: `log` shows the router calling `hubspot_upsert` and (if Tier 1) `slack_alert`,
+Expected: `log` shows the router calling `crm_upsert` and (if Tier 1) `slack_alert`,
 `lemlist_queue`, then `finish`. Statuses are `[dry-run] ...`.
 
 **Commit:** `git add router.py && git commit -m "feat: router agent (write-backs as tools, self-guarding)"`
@@ -886,7 +983,7 @@ def generate_report(results: list[RunResult], path: str = "output/run-report.htm
    <div style="margin-top:6px" class="muted">{{ s.outreach.body }}</div></div>
   <div class="agents"><div class="lab">Agent tool calls</div>
    {% for a in r.agent_log %}<code>{{ a }}</code> {% endfor %}</div>
-  <div class="status">HubSpot: <code>{{ r.hubspot_status }}</code> ·
+  <div class="status">CRM: <code>{{ r.crm_status }}</code> ·
    Slack: <code>{{ r.slack_status }}</code> · lemlist: <code>{{ r.lemlist_status }}</code></div>
  </div>
 </div>{% endfor %}
@@ -958,12 +1055,12 @@ open output/run-report.html
 Expected: each account prints a score line + tool-call count; report shows agent tool calls,
 Tier-1 routing, and the weak account flagged.
 
-**Then a real T0 run on a couple accounts (HubSpot only, since Slack/lemlist files come in T1/T2):**
+**Then a real T0 run on a couple accounts (CRM only, since Slack/lemlist files come in T1/T2):**
 ```bash
 python main.py --limit 2
 ```
-Expected: HubSpot statuses show real ids; Slack/lemlist show ERROR (modules not present yet) but
-the run completes — this is the isolation guarantee working.
+Expected: CRM (Attio) statuses show real record ids; Slack/lemlist show ERROR (modules not present
+yet) but the run completes — this is the isolation guarantee working.
 
 **Commit:** `git add main.py && git commit -m "feat: orchestrator (scouts -> analyst -> router)"`
 
@@ -1079,15 +1176,15 @@ Run everything for real:
 python main.py            # all accounts
 open output/run-report.html
 ```
-Expected: confident Tier-1 accounts → router calls hubspot + slack + lemlist; weak accounts →
-router calls only hubspot and slack/lemlist self-refuse (visible in the agent tool-call log).
+Expected: confident Tier-1 accounts → router calls crm_upsert + slack_alert + lemlist_queue; weak
+accounts → router calls only crm_upsert and slack/lemlist self-refuse (visible in the agent tool-call log).
 
 `README.md`:
 ```markdown
 # duvo-signal-loop
 
 A team of tool-using AI agents that turns a target list of retail/CPG accounts into rep-ready
-pipeline, against Duvo's stack (Exa, HubSpot, Slack, lemlist).
+pipeline, against Duvo's stack (Exa, a CRM, Slack, lemlist).
 
 ## The agents
 - **Scout agents (x4, parallel)** — each owns a beat (ERP, hiring, M&A, pain), uses an `exa_search`
@@ -1101,10 +1198,15 @@ pipeline, against Duvo's stack (Exa, HubSpot, Slack, lemlist).
 Python (`main.py`) only orchestrates the hand-offs. Every agent runs on one shared tool-use loop
 (`agent_core.run_agent`).
 
+## Pluggable CRM
+The CRM write-back is one interface — `crm.upsert_account()` — with two adapters. It ships working
+against **Attio** (instant self-serve API, free plan) and carries a **HubSpot** adapter behind the
+same interface. Target Duvo's real HubSpot by flipping `CRM_PROVIDER=hubspot` — no other change.
+
 ## Setup
 1. `python3.11 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
-2. `cp .env.example .env`; fill Exa, Anthropic, HubSpot private-app token, Slack webhook, lemlist
-   API key + a **paused** campaign id.
+2. `cp .env.example .env`; fill Exa, Anthropic, `ATTIO_API_KEY` (keep `CRM_PROVIDER=attio`), Slack
+   webhook, lemlist API key + a **paused** campaign id. See `.env.example` for exact, sourced steps.
 
 ## Run
 - `python main.py --dry-run` — agents run and really decide; write-back tools simulate (safe demo fallback).
@@ -1121,12 +1223,14 @@ Python (`main.py`) only orchestrates the hand-offs. Every agent runs on one shar
 - Exa noise/staleness on big brands (scout iteration + analyst verification mitigate; recall limited).
 - Agent loops add latency/variance; bounded by turn caps. Demo runs a few accounts live, full list pre-run.
 - No real person-level email — persona recommended; demo uses a test email as the lead.
-- One-shot run; production = scheduled run + score diff + alert only on change. No HubSpot dedup yet.
+- One-shot run; production = scheduled run + score diff + alert only on change. No CRM dedup yet
+  (re-runs create new records; production would assert/upsert).
 
 ## What I'd build next (one week)
 Scouts as MCP-tool agents (Apollo/LinkedIn/Gong) · a discovery agent for net-new accounts · a Gong
-call-outcome agent writing back to HubSpot · a reply-handling agent branching the lemlist sequence
-on intent. The `run_agent` runtime stays; only toolsets grow.
+call-outcome agent writing back to the CRM · a reply-handling agent branching the lemlist sequence
+on intent · promote the ICP score to a structured CRM attribute. The `run_agent` runtime stays;
+only toolsets grow.
 ```
 
 **Commit:** `git add README.md && git commit -m "docs: README"`
@@ -1139,16 +1243,17 @@ on intent. The `run_agent` runtime stays; only toolsets grow.
 - Analyst agent with verification searches + deterministic guard → Task 6. ✓
 - Router agent, write-backs as self-guarding tools, dry-run aware → Task 8 (+T1/T2 tools 11,12). ✓
 - Shared `run_agent` tool-use runtime → Task 3. ✓
-- HubSpot / Slack / lemlist write-backs → Tasks 7, 11, 12. ✓
+- Pluggable CRM (crm dispatcher + Attio default + HubSpot adapter) / Slack / lemlist → Tasks 7, 11, 12. ✓
 - Bounded agency / human-in-the-loop (no invent, guard cap, never-send, self-refuse) → Tasks 5,6,7,8. ✓
 - `--dry-run` (agents decide, tools simulate) → Tasks 8, 10. ✓
 - Layered build T0→T1→T2 → Tasks 3-10 (T0), 11 (T1), 12 (T2). ✓
 - Agent tool-call audit log in report → Tasks 2 (`agent_log`), 9, 10. ✓
 - Target list incl. 2 weak accounts → Task 0. ✓
-- README (agents / bounded agency / where it breaks / next) → Task 13. ✓
+- README (agents / pluggable CRM / bounded agency / where it breaks / next) → Task 13. ✓
 
 Type consistency: `Company`/`Signal`/`OutreachDraft`/`ICPScore`/`RunResult` field names identical
-across Tasks 2,5,6,7,8,9,10,11,12. `run_agent(system,user,tools,impls,max_turns,final_tools,log)`
-signature identical across Tasks 3,5,6,8. Write-back functions return strings assigned to
-`RunResult.*_status`. ✓
+across Tasks 2,5,6,7,8,9,10,11,12. `RunResult.crm_status` used by router (Task 8), reporter
+(Task 9). `crm.upsert_account(score)->str` interface implemented by Attio + HubSpot (Task 7),
+called by router (Task 8). `run_agent(system,user,tools,impls,max_turns,final_tools,log)` signature
+identical across Tasks 3,5,6,8. Write-back functions return strings assigned to `RunResult.*_status`. ✓
 ```
