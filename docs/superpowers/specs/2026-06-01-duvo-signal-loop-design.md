@@ -13,13 +13,15 @@ A small **team of AI agents** that turns a target list of retail/CPG accounts in
 pipeline. Per account: parallel **scout agents** (each with an Exa search tool) hunt sourced
 intent signals, an **analyst agent** validates them — verifying doubtful claims with its own
 searches before trusting them — scores ICP fit and drafts personalized outreach, and a **router
-agent** decides how to action the account into the real stack (CRM, Slack, lemlist). Python
+agent** decides how to action the account into the real stack (CRM, Slack, outreach tool). Python
 only orchestrates the hand-offs; each node is a genuine tool-using agent, not a fixed query.
 
-The CRM write-back is a **pluggable interface** (`crm.upsert_account`): it ships working against
-**Attio** (a real CRM with instant self-serve API access) and carries a **HubSpot** adapter behind
-the same interface — Duvo's actual stack is a one-line config flip (`CRM_PROVIDER`) once a portal
-is available. Built on Attio so the demo provisions in minutes, not on a CRM signup that may stall.
+Both the CRM and the outreach steps are **pluggable interfaces**. `crm.upsert_account` ships
+working against **Attio** (instant self-serve CRM API) with a **HubSpot** adapter behind the same
+interface; `outreach.queue_lead` ships against **Brevo** (free API, no card) with a **lemlist**
+adapter behind the same interface. Duvo's actual stack (HubSpot + lemlist) is a one-line config
+flip each (`CRM_PROVIDER`, `OUTREACH_PROVIDER`) once those seats exist — built on Attio + Brevo so
+the demo provisions in minutes, not on signups that may stall.
 
 ## Why agents, not a workflow (the design thesis)
 
@@ -57,10 +59,11 @@ ANALYST AGENT
    - outputs score, tier, confidence, persona, angle, outreach draft
    ▼  + deterministic apply_guards()  (caps hallucinated confidence)
 ROUTER AGENT
-   tools: crm_upsert, slack_alert, lemlist_queue, finish
+   tools: crm_upsert, slack_alert, outreach_queue, finish
    - decides which actions the account warrants
-   - crm_upsert -> pluggable CRM (Attio default, HubSpot adapter behind same interface)
-   - tools SELF-GUARD: slack/lemlist refuse unless confident Tier 1
+   - crm_upsert      -> pluggable CRM (Attio default, HubSpot adapter behind same interface)
+   - outreach_queue  -> pluggable outreach (Brevo default, lemlist adapter behind same interface)
+   - tools SELF-GUARD: slack/outreach refuse unless confident Tier 1
    ▼
 output/run-report.html   (audit log: every agent's tool calls — for the Loom, not the deliverable)
 ```
@@ -84,7 +87,8 @@ honest (model-directed tool use in a loop) and the codebase small and auditable.
 | `scouts.py` | `run_scout(company, beat)` — one scout agent per beat; `scout_all()` runs 4 in parallel | ✔ scout |
 | `analyst.py` | `run_analyst(company, signals)` — analyst agent; `apply_guards()` deterministic post-guard | ✔ analyst |
 | `writeback/crm.py` | CRM dispatcher: `upsert_account()` routes to Attio or HubSpot by `CRM_PROVIDER` | — |
-| `writeback/{attio,hubspot,slack,lemlist}.py` | Deterministic, self-guarding API calls | — |
+| `writeback/outreach.py` | Outreach dispatcher: `queue_lead()` routes to Brevo or lemlist by `OUTREACH_PROVIDER` | — |
+| `writeback/{attio,hubspot,slack,brevo,lemlist}.py` | Deterministic, self-guarding API calls | — |
 | `router.py` | `run_router(rr, dry_run)` — router agent; write-backs exposed as its tools | ✔ router |
 | `reporter.py` + `templates/report.html` | HTML audit log of the run | — |
 | `main.py` | Orchestrate per account: scouts → analyst → router → report; `--dry-run` | conductor |
@@ -95,7 +99,7 @@ honest (model-directed tool use in a loop) and the codebase small and auditable.
 - `OutreachDraft`: `persona`, `subject`, `first_line`, `body`
 - `ICPScore`: `company_name`, `domain`, `score:int`, `tier`, `confidence`, `why_fit`, `why_not`,
   `recommended_persona`, `recommended_angle`, `reasoning`, `needs_human_research:bool`, `outreach`
-- `RunResult`: `score`, `signals`, `crm_status`, `slack_status`, `lemlist_status`,
+- `RunResult`: `score`, `signals`, `crm_status`, `slack_status`, `outreach_status`,
   `agent_log: list[str]` (tool calls each agent made — shown in the report)
 
 ## Where agency is bounded (deliberate human-in-the-loop)
@@ -105,10 +109,10 @@ honest (model-directed tool use in a loop) and the codebase small and auditable.
 2. **The analyst's score is capped by a deterministic guard.** `apply_guards()` — not the model —
    forces `confidence=low` + `needs_human_research=true` when evidence is thin, and caps a
    low-confidence high score. The model cannot talk its way past this.
-3. **The router never sends.** `lemlist_queue` only adds a lead to a **paused** campaign; a rep
-   approves and sends. `slack_alert` and `lemlist_queue` self-refuse unless the account is a
-   confident Tier 1 — true even if the router agent decides otherwise. CRM notes are labeled
-   "AI-suggested — review before outreach."
+3. **The router never sends.** `outreach_queue` only adds the lead to a **review list** (Brevo) or
+   a **paused** campaign (lemlist); a rep reviews and sends. `slack_alert` and `outreach_queue`
+   self-refuse unless the account is a confident Tier 1 — true even if the router agent decides
+   otherwise. CRM notes are labeled "AI-suggested — review before outreach."
 
 ## Layered build order (time insurance)
 
@@ -116,13 +120,13 @@ honest (model-directed tool use in a loop) and the codebase small and auditable.
   CRM write-back (Attio via the `crm` dispatcher) + router + report. A complete agentic loop
   into the CRM. The demo stands even if nothing else lands.
 - **T1 (+30m):** add `slack_alert` to the router's toolset.
-- **T2 (+45m, riskiest, last):** add `lemlist_queue` (paused campaign) to the router's toolset.
+- **T2 (+45m, riskiest, last):** add `outreach_queue` (Brevo review list) to the router's toolset.
 
 ## Target list
 
 8–10 real EU retail/CPG accounts with genuine recent public triggers, plus 1–2 deliberately
 weak/small accounts so the guard fires on camera (scouts find little → analyst flags →
-router declines Slack/lemlist).
+router declines Slack/outreach).
 
 ## Error handling
 
@@ -156,5 +160,6 @@ real emails. The `run_agent` runtime stays; only toolsets grow.
 
 Python 3.11+ · anthropic (tool-use loop) · exa-py · requests · pydantic · jinja2 · python-dotenv.
 Keys: `EXA_API_KEY`, `ANTHROPIC_API_KEY`, `CRM_PROVIDER` (attio|hubspot), `ATTIO_API_KEY`,
-`HUBSPOT_TOKEN` (optional), `SLACK_WEBHOOK_URL`, `LEMLIST_API_KEY`, `LEMLIST_CAMPAIGN_ID`,
+`HUBSPOT_TOKEN` (optional), `SLACK_WEBHOOK_URL`, `OUTREACH_PROVIDER` (brevo|lemlist),
+`BREVO_API_KEY`, `BREVO_LIST_ID`, `LEMLIST_API_KEY` (optional), `LEMLIST_CAMPAIGN_ID` (optional),
 `TEST_EMAIL`.

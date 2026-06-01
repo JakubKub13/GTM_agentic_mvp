@@ -40,7 +40,9 @@ duvo-signal-loop/
 │   ├── attio.py            # Attio CRM write-back (T0, default)
 │   ├── hubspot.py          # HubSpot adapter, same interface (optional)
 │   ├── slack.py            # T1
-│   └── lemlist.py          # T2
+│   ├── outreach.py         # Outreach dispatcher: brevo|lemlist by OUTREACH_PROVIDER (T2)
+│   ├── brevo.py            # Brevo outreach (T2, default)
+│   └── lemlist.py          # lemlist adapter, same interface (optional)
 ├── router.py                # router agent; write-backs as tools (T0 minimal → T1 → T2)
 ├── reporter.py              # HTML audit log (T0)
 ├── templates/report.html    # T0
@@ -58,8 +60,12 @@ duvo-signal-loop/
    (Optional: to target Duvo's real HubSpot instead, set `CRM_PROVIDER=hubspot` + `HUBSPOT_TOKEN`
    from a private app in a HubSpot CRM portal — see `.env.example`.)
 2. **Slack:** Incoming Webhook for #sales. Copy URL.
-3. **lemlist:** create ONE campaign, leave it **paused**, copy its campaign id and the API key.
-4. **Exa + Anthropic:** copy both keys.
+3. **Brevo (default outreach):** sign up at https://www.brevo.com (free, no card) → SMTP & API →
+   API Keys → generate (`xkeysib-...`) into `BREVO_API_KEY`. Create a contact list (Contacts →
+   Lists), e.g. "duvo-tier1-review", and copy its numeric ID into `BREVO_LIST_ID`. Keep
+   `OUTREACH_PROVIDER=brevo`. (Optional: `OUTREACH_PROVIDER=lemlist` + a **paused** campaign for
+   Duvo's real stack — see `.env.example`.)
+4. **Exa + Anthropic + Attio:** copy the three keys (these three run the whole loop into the CRM).
 
 ---
 
@@ -94,6 +100,9 @@ CRM_PROVIDER=attio
 ATTIO_API_KEY=
 HUBSPOT_TOKEN=
 SLACK_WEBHOOK_URL=
+OUTREACH_PROVIDER=brevo
+BREVO_API_KEY=
+BREVO_LIST_ID=
 LEMLIST_API_KEY=
 LEMLIST_CAMPAIGN_ID=
 TEST_EMAIL=jakubkubala3@gmail.com
@@ -148,6 +157,9 @@ CRM_PROVIDER = os.environ.get("CRM_PROVIDER", "attio")  # "attio" (default) | "h
 ATTIO_API_KEY = os.environ.get("ATTIO_API_KEY", "")
 HUBSPOT_TOKEN = os.environ.get("HUBSPOT_TOKEN", "")
 SLACK_WEBHOOK_URL = os.environ.get("SLACK_WEBHOOK_URL", "")
+OUTREACH_PROVIDER = os.environ.get("OUTREACH_PROVIDER", "brevo")  # "brevo" (default) | "lemlist"
+BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
+BREVO_LIST_ID = os.environ.get("BREVO_LIST_ID", "")
 LEMLIST_API_KEY = os.environ.get("LEMLIST_API_KEY", "")
 LEMLIST_CAMPAIGN_ID = os.environ.get("LEMLIST_CAMPAIGN_ID", "")
 TEST_EMAIL = os.environ.get("TEST_EMAIL", "jakubkubala3@gmail.com")
@@ -219,7 +231,7 @@ class RunResult(BaseModel):
     signals: list[Signal]
     crm_status: str = "skipped"
     slack_status: str = "skipped"
-    lemlist_status: str = "skipped"
+    outreach_status: str = "skipped"
     agent_log: list[str] = []   # tool calls each agent made, for the report
 ```
 
@@ -802,19 +814,20 @@ git commit -m "feat: pluggable CRM write-back (Attio default, HubSpot adapter)"
 **Files:** Create `router.py`
 
 The router is an agent whose tools are the write-backs. Build the FULL version now: all four tools
-(`crm_upsert`, `slack_alert`, `lemlist_queue`, `finish`) are always registered, and the
-Slack/lemlist modules are imported **lazily inside their tool functions**. So in T0 — before
-`writeback/slack.py` and `writeback/lemlist.py` exist — a confident Tier 1 that triggers
+(`crm_upsert`, `slack_alert`, `outreach_queue`, `finish`) are always registered, and the
+Slack/outreach modules are imported **lazily inside their tool functions**. So in T0 — before
+`writeback/slack.py` and `writeback/outreach.py` exist — a confident Tier 1 that triggers
 `slack_alert` raises `ImportError`, which `run_agent` catches and feeds back as `tool error: ...`;
 the run still completes. Once T1/T2 add those files, the same router lights up with no code change.
-`crm_upsert` calls the CRM dispatcher, so it targets Attio or HubSpot per `CRM_PROVIDER` with no
-router change. Every tool also self-guards (refuses non-confident-Tier-1) and respects `dry_run`.
+`crm_upsert` calls the CRM dispatcher (Attio/HubSpot per `CRM_PROVIDER`) and `outreach_queue` calls
+the outreach dispatcher (Brevo/lemlist per `OUTREACH_PROVIDER`), both with no router change. Every
+tool also self-guards (refuses non-confident-Tier-1) and respects `dry_run`.
 
 ```python
 """Router agent: decides how to action a scored account; its tools are the write-backs."""
 import json
 
-from config import TEST_EMAIL, CRM_PROVIDER
+from config import TEST_EMAIL, CRM_PROVIDER, OUTREACH_PROVIDER
 from models import RunResult
 from agent_core import run_agent
 from writeback import crm
@@ -824,8 +837,8 @@ ROUTER_SYSTEM = (
     "sales stack. Rules:\n"
     "- ALWAYS call crm_upsert to log the account in the CRM with its evidence note.\n"
     "- If the account is a CONFIDENT Tier 1 (tier == 'Tier 1' and needs_human_research is false), "
-    "also call slack_alert and lemlist_queue (queues a PAUSED draft a rep approves — never sent "
-    "automatically).\n"
+    "also call slack_alert and outreach_queue (queues the lead for a rep to review and send — "
+    "never sent automatically).\n"
     "- If it is flagged needs_human_research, or not Tier 1, ONLY call crm_upsert.\n"
     "Call finish when done. Some tools may refuse if their own safety check fails — that is "
     "expected; do not retry a refused tool."
@@ -858,15 +871,15 @@ def run_router(rr: RunResult, dry_run: bool, test_email: str = TEST_EMAIL, log=N
             rr.slack_status = slack.alert_tier1(s)
         return rr.slack_status
 
-    def lemlist_queue():
+    def outreach_queue():
         if not confident_t1:
             return "refused: not a confident Tier 1 (safety guard)"
         if dry_run:
-            rr.lemlist_status = "[dry-run] queue paused lemlist draft"
+            rr.outreach_status = f"[dry-run] queue lead for review in {OUTREACH_PROVIDER}"
         else:
-            from writeback import lemlist
-            rr.lemlist_status = lemlist.queue_draft(s, test_email)
-        return rr.lemlist_status
+            from writeback import outreach
+            rr.outreach_status = outreach.queue_lead(s, test_email)
+        return rr.outreach_status
 
     def finish():
         return "done"
@@ -875,12 +888,12 @@ def run_router(rr: RunResult, dry_run: bool, test_email: str = TEST_EMAIL, log=N
         _tool_schema("crm_upsert", "Log the company in the CRM with its ICP score and an "
                                    "evidence note. Always allowed."),
         _tool_schema("slack_alert", "Post a Tier-1 alert to #sales. Only for confident Tier 1."),
-        _tool_schema("lemlist_queue", "Queue the lead into a PAUSED lemlist draft for rep "
-                                      "approval. Only for confident Tier 1."),
+        _tool_schema("outreach_queue", "Queue the lead into the outreach tool's review list for a "
+                                       "rep to approve and send. Only for confident Tier 1."),
         _tool_schema("finish", "Call when routing is complete."),
     ]
     impls = {"crm_upsert": crm_upsert, "slack_alert": slack_alert,
-             "lemlist_queue": lemlist_queue, "finish": finish}
+             "outreach_queue": outreach_queue, "finish": finish}
 
     user = json.dumps({
         "company": s.company_name, "domain": s.domain, "score": s.score, "tier": s.tier,
@@ -903,11 +916,11 @@ c = Company(name='Rohlik Group', domain='rohlik.cz', country='CZ', description='
 score = run_analyst(c, scout_all(c)); rr = RunResult(score=score, signals=[])
 log=[]; run_router(rr, dry_run=True, log=log)
 print('decisions:', log)
-print('crm:', rr.crm_status, '| slack:', rr.slack_status, '| lemlist:', rr.lemlist_status)
+print('crm:', rr.crm_status, '| slack:', rr.slack_status, '| outreach:', rr.outreach_status)
 "
 ```
 Expected: `log` shows the router calling `crm_upsert` and (if Tier 1) `slack_alert`,
-`lemlist_queue`, then `finish`. Statuses are `[dry-run] ...`.
+`outreach_queue`, then `finish`. Statuses are `[dry-run] ...`.
 
 **Commit:** `git add router.py && git commit -m "feat: router agent (write-backs as tools, self-guarding)"`
 
@@ -984,7 +997,7 @@ def generate_report(results: list[RunResult], path: str = "output/run-report.htm
   <div class="agents"><div class="lab">Agent tool calls</div>
    {% for a in r.agent_log %}<code>{{ a }}</code> {% endfor %}</div>
   <div class="status">CRM: <code>{{ r.crm_status }}</code> ·
-   Slack: <code>{{ r.slack_status }}</code> · lemlist: <code>{{ r.lemlist_status }}</code></div>
+   Slack: <code>{{ r.slack_status }}</code> · Outreach: <code>{{ r.outreach_status }}</code></div>
  </div>
 </div>{% endfor %}
 </body></html>
@@ -1055,11 +1068,11 @@ open output/run-report.html
 Expected: each account prints a score line + tool-call count; report shows agent tool calls,
 Tier-1 routing, and the weak account flagged.
 
-**Then a real T0 run on a couple accounts (CRM only, since Slack/lemlist files come in T1/T2):**
+**Then a real T0 run on a couple accounts (CRM only, since Slack/outreach files come in T1/T2):**
 ```bash
 python main.py --limit 2
 ```
-Expected: CRM (Attio) statuses show real record ids; Slack/lemlist show ERROR (modules not present
+Expected: CRM (Attio) statuses show real record ids; Slack/outreach show ERROR (modules not present
 yet) but the run completes — this is the isolation guarantee working.
 
 **Commit:** `git add main.py && git commit -m "feat: orchestrator (scouts -> analyst -> router)"`
@@ -1114,16 +1127,77 @@ Expected: message in Slack; prints `alert posted to #sales`.
 
 ---
 
-## Task 12: writeback/lemlist.py (T2 — riskiest, last)
+## Task 12: Outreach — outreach dispatcher + Brevo (T2)  [lemlist adapter optional]
 
-**Files:** Create `writeback/lemlist.py`. (Router already calls it lazily — no router change needed.)
+**Files:** Create `writeback/outreach.py`, `writeback/brevo.py`. (Optional adapter
+`writeback/lemlist.py` below.) The router already calls `outreach.queue_lead` lazily — no router change.
 
-API: `POST https://api.lemlist.com/api/campaigns/{campaignId}/leads`, basic auth
-(`username=""`, `password=<API_KEY>`). Campaign must already exist and be **paused** so the lead is
-a draft and never auto-sends.
+The router calls ONE interface — `outreach.queue_lead(score, test_email)` — and the dispatcher
+routes to Brevo (default) or lemlist by `OUTREACH_PROVIDER`. Neither ever calls a send endpoint:
+the lead lands in a review list / paused campaign for a human to approve and send.
 
+`writeback/outreach.py`:
 ```python
-"""Queue a Tier-1 lead into a PAUSED lemlist campaign as a draft for rep approval."""
+"""Outreach dispatcher — one interface the router uses; provider chosen by OUTREACH_PROVIDER."""
+from config import OUTREACH_PROVIDER
+from models import ICPScore
+
+
+def queue_lead(score: ICPScore, test_email: str) -> str:
+    if OUTREACH_PROVIDER == "lemlist":
+        from writeback import lemlist
+        return lemlist.queue_lead(score, test_email)
+    from writeback import brevo
+    return brevo.queue_lead(score, test_email)
+```
+
+`writeback/brevo.py` (endpoint verified: `POST /v3/contacts`, header `api-key`; `listIds` adds the
+contact to the review list on creation — no separate add-to-list call needed):
+```python
+"""Brevo outreach: create the contact in a Tier-1 review list. Never sends — a rep approves + sends."""
+import requests
+
+from config import BREVO_API_KEY, BREVO_LIST_ID, require
+from models import ICPScore
+
+_BASE = "https://api.brevo.com/v3"
+
+
+def _headers() -> dict:
+    return {"api-key": require("BREVO_API_KEY", BREVO_API_KEY),
+            "Content-Type": "application/json", "accept": "application/json"}
+
+
+def queue_lead(score: ICPScore, test_email: str) -> str:
+    list_id = int(require("BREVO_LIST_ID", BREVO_LIST_ID))
+    # Custom attributes (COMPANY, ICEBREAKER, ...) must exist on the account or Brevo 400s;
+    # try the rich payload, then fall back to email + list only so the lead always lands.
+    full = {
+        "email": test_email,
+        "attributes": {
+            "COMPANY": score.company_name,
+            "DOMAIN": score.domain,
+            "JOBTITLE": score.recommended_persona,
+            "ICP_SCORE": str(score.score),
+            "ICEBREAKER": score.outreach.first_line,
+        },
+        "listIds": [list_id],
+        "updateEnabled": True,
+    }
+    minimal = {"email": test_email, "listIds": [list_id], "updateEnabled": True}
+    last = None
+    for payload in (full, minimal):
+        last = requests.post(f"{_BASE}/contacts", headers=_headers(), json=payload)
+        if last.status_code < 300:
+            return f"contact queued in Brevo review list {list_id} (not sent — rep reviews & sends)"
+    last.raise_for_status()
+    return ""
+```
+
+**Optional — `writeback/lemlist.py`** (same `queue_lead(score, test_email) -> str` interface; only
+used when `OUTREACH_PROVIDER=lemlist`. Needs a paid lemlist plan + a **paused** campaign):
+```python
+"""lemlist adapter: queue a Tier-1 lead into a PAUSED campaign as a draft. Same interface as brevo."""
 import requests
 
 from config import LEMLIST_API_KEY, LEMLIST_CAMPAIGN_ID, require
@@ -1132,40 +1206,44 @@ from models import ICPScore
 _BASE = "https://api.lemlist.com/api"
 
 
-def queue_draft(score: ICPScore, test_email: str) -> str:
+def queue_lead(score: ICPScore, test_email: str) -> str:
     campaign = require("LEMLIST_CAMPAIGN_ID", LEMLIST_CAMPAIGN_ID)
     url = f"{_BASE}/campaigns/{campaign}/leads"
     payload = {
-        "email": test_email,                       # demo: candidate's own email as test lead
+        "email": test_email,
         "companyName": score.company_name,
         "companyDomain": score.domain,
         "jobTitle": score.recommended_persona,
-        "icpScore": str(score.score),              # custom var usable in lemlist templates
-        "icebreaker": score.outreach.first_line,   # custom var for the opener
+        "icpScore": str(score.score),
+        "icebreaker": score.outreach.first_line,
     }
     r = requests.post(url, auth=("", require("LEMLIST_API_KEY", LEMLIST_API_KEY)),
                       json=payload, params={"deduplicate": "true"})
     r.raise_for_status()
-    return f"lead queued in paused campaign {campaign} (awaiting rep approval)"
+    return f"lead queued in paused lemlist campaign {campaign} (awaiting rep approval)"
 ```
 
-**Verify:**
+**Verify (Brevo, the default):**
 ```bash
 python -c "
 from models import ICPScore, OutreachDraft
-from writeback import lemlist
+from writeback import outreach
 s = ICPScore(company_name='Rohlik Group', domain='rohlik.cz', score=9, tier='Tier 1',
   confidence='high', why_fit=['x'], why_not=[], recommended_persona='Supply Chain Director',
   recommended_angle='x', reasoning='x', needs_human_research=False,
   outreach=OutreachDraft(persona='Supply Chain Director', subject='x', first_line='Saw your CEE expansion', body='y'))
-print(lemlist.queue_draft(s, 'jakubkubala3@gmail.com'))
+print(outreach.queue_lead(s, 'jakubkubala3@gmail.com'))
 "
 ```
-Expected: prints `lead queued in paused campaign ...`; confirm the lead in lemlist and the
-campaign is paused. If the API errors, the loop still completes (router status ERROR); fall back
-to a manually added lead + screenshot and say so.
+Expected: prints `contact queued in Brevo review list ...`; confirm the contact appears in the
+review list in Brevo and nothing was sent. If the API errors, the loop still completes (router
+status ERROR); fall back to a manually added contact + screenshot and say so.
 
-**Commit:** `git add writeback/lemlist.py && git commit -m "feat: lemlist paused draft tool"`
+**Commit:**
+```bash
+git add writeback/outreach.py writeback/brevo.py writeback/lemlist.py
+git commit -m "feat: pluggable outreach (Brevo default, lemlist adapter)"
+```
 
 ---
 
@@ -1176,15 +1254,15 @@ Run everything for real:
 python main.py            # all accounts
 open output/run-report.html
 ```
-Expected: confident Tier-1 accounts → router calls crm_upsert + slack_alert + lemlist_queue; weak
-accounts → router calls only crm_upsert and slack/lemlist self-refuse (visible in the agent tool-call log).
+Expected: confident Tier-1 accounts → router calls crm_upsert + slack_alert + outreach_queue; weak
+accounts → router calls only crm_upsert and slack/outreach self-refuse (visible in the agent tool-call log).
 
 `README.md`:
 ```markdown
 # duvo-signal-loop
 
 A team of tool-using AI agents that turns a target list of retail/CPG accounts into rep-ready
-pipeline, against Duvo's stack (Exa, a CRM, Slack, lemlist).
+pipeline, against Duvo's stack (Exa, a CRM, Slack, an outreach tool).
 
 ## The agents
 - **Scout agents (x4, parallel)** — each owns a beat (ERP, hiring, M&A, pain), uses an `exa_search`
@@ -1193,20 +1271,22 @@ pipeline, against Duvo's stack (Exa, a CRM, Slack, lemlist).
   claim), scores ICP fit, drafts personalized outreach. A deterministic `apply_guards()` caps any
   hallucinated confidence.
 - **Router agent** — decides how to action the account; its tools are the write-backs. They
-  self-guard: Slack/lemlist refuse anything but a confident Tier 1.
+  self-guard: Slack/outreach refuse anything but a confident Tier 1.
 
 Python (`main.py`) only orchestrates the hand-offs. Every agent runs on one shared tool-use loop
 (`agent_core.run_agent`).
 
-## Pluggable CRM
-The CRM write-back is one interface — `crm.upsert_account()` — with two adapters. It ships working
-against **Attio** (instant self-serve API, free plan) and carries a **HubSpot** adapter behind the
-same interface. Target Duvo's real HubSpot by flipping `CRM_PROVIDER=hubspot` — no other change.
+## Pluggable CRM + outreach
+Both write-back steps are one interface with two adapters each:
+- `crm.upsert_account()` — **Attio** (default, instant self-serve free API) | **HubSpot** (`CRM_PROVIDER=hubspot`).
+- `outreach.queue_lead()` — **Brevo** (default, free API, no card) | **lemlist** (`OUTREACH_PROVIDER=lemlist`).
+Target Duvo's real stack (HubSpot + lemlist) by flipping the two env vars — no other change.
 
 ## Setup
 1. `python3.11 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`
 2. `cp .env.example .env`; fill Exa, Anthropic, `ATTIO_API_KEY` (keep `CRM_PROVIDER=attio`), Slack
-   webhook, lemlist API key + a **paused** campaign id. See `.env.example` for exact, sourced steps.
+   webhook, `BREVO_API_KEY` + `BREVO_LIST_ID` (keep `OUTREACH_PROVIDER=brevo`). See `.env.example`
+   for exact, sourced steps.
 
 ## Run
 - `python main.py --dry-run` — agents run and really decide; write-back tools simulate (safe demo fallback).
@@ -1216,8 +1296,9 @@ same interface. Target Duvo's real HubSpot by flipping `CRM_PROVIDER=hubspot` �
 ## Where agency is bounded (deliberate human-in-the-loop)
 - Scouts may not invent; the analyst independently verifies; undated signals are discarded.
 - `apply_guards()` — not the model — caps low-confidence high scores and flags thin accounts.
-- The router never sends: lemlist leads land in a **paused** campaign a rep approves; Slack/lemlist
-  tools refuse non-confident-Tier-1 accounts even if the agent asks.
+- The router never sends: outreach leads land in a **review list** (Brevo) / **paused** campaign
+  (lemlist) a rep approves; Slack/outreach tools refuse non-confident-Tier-1 accounts even if the
+  agent asks.
 
 ## Where it breaks
 - Exa noise/staleness on big brands (scout iteration + analyst verification mitigate; recall limited).
@@ -1228,7 +1309,7 @@ same interface. Target Duvo's real HubSpot by flipping `CRM_PROVIDER=hubspot` �
 
 ## What I'd build next (one week)
 Scouts as MCP-tool agents (Apollo/LinkedIn/Gong) · a discovery agent for net-new accounts · a Gong
-call-outcome agent writing back to the CRM · a reply-handling agent branching the lemlist sequence
+call-outcome agent writing back to the CRM · a reply-handling agent branching the outreach sequence
 on intent · promote the ICP score to a structured CRM attribute. The `run_agent` runtime stays;
 only toolsets grow.
 ```
@@ -1243,17 +1324,19 @@ only toolsets grow.
 - Analyst agent with verification searches + deterministic guard → Task 6. ✓
 - Router agent, write-backs as self-guarding tools, dry-run aware → Task 8 (+T1/T2 tools 11,12). ✓
 - Shared `run_agent` tool-use runtime → Task 3. ✓
-- Pluggable CRM (crm dispatcher + Attio default + HubSpot adapter) / Slack / lemlist → Tasks 7, 11, 12. ✓
-- Bounded agency / human-in-the-loop (no invent, guard cap, never-send, self-refuse) → Tasks 5,6,7,8. ✓
+- Pluggable CRM (crm dispatcher + Attio + HubSpot) → Task 7; Slack → Task 11; pluggable outreach
+  (outreach dispatcher + Brevo + lemlist) → Task 12. ✓
+- Bounded agency / human-in-the-loop (no invent, guard cap, never-send, self-refuse) → Tasks 5,6,7,8,12. ✓
 - `--dry-run` (agents decide, tools simulate) → Tasks 8, 10. ✓
 - Layered build T0→T1→T2 → Tasks 3-10 (T0), 11 (T1), 12 (T2). ✓
 - Agent tool-call audit log in report → Tasks 2 (`agent_log`), 9, 10. ✓
 - Target list incl. 2 weak accounts → Task 0. ✓
-- README (agents / pluggable CRM / bounded agency / where it breaks / next) → Task 13. ✓
+- README (agents / pluggable CRM+outreach / bounded agency / where it breaks / next) → Task 13. ✓
 
 Type consistency: `Company`/`Signal`/`OutreachDraft`/`ICPScore`/`RunResult` field names identical
-across Tasks 2,5,6,7,8,9,10,11,12. `RunResult.crm_status` used by router (Task 8), reporter
-(Task 9). `crm.upsert_account(score)->str` interface implemented by Attio + HubSpot (Task 7),
-called by router (Task 8). `run_agent(system,user,tools,impls,max_turns,final_tools,log)` signature
-identical across Tasks 3,5,6,8. Write-back functions return strings assigned to `RunResult.*_status`. ✓
+across Tasks 2,5,6,7,8,9,10,11,12. `RunResult.crm_status` + `RunResult.outreach_status` used by
+router (Task 8) and reporter (Task 9). `crm.upsert_account(score)->str` implemented by Attio +
+HubSpot (Task 7); `outreach.queue_lead(score, test_email)->str` implemented by Brevo + lemlist
+(Task 12); both called by the router (Task 8). `run_agent(system,user,tools,impls,max_turns,
+final_tools,log)` signature identical across Tasks 3,5,6,8. ✓
 ```
