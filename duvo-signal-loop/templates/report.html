@@ -1,0 +1,46 @@
+<!doctype html><html><head><meta charset="utf-8"><title>duvo-signal-loop run</title>
+<style>
+ body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;margin:0;background:#0f1115;color:#e6e6e6}
+ header{padding:24px 32px;background:#161922;border-bottom:1px solid #262b36}
+ h1{margin:0;font-size:20px}.sub{color:#8a93a2;font-size:13px;margin-top:4px}
+ .card{margin:16px 32px;border:1px solid #262b36;border-radius:10px;overflow:hidden;background:#161922}
+ .top{display:flex;align-items:center;gap:14px;padding:14px 18px;border-bottom:1px solid #262b36}
+ .badge{font-weight:700;border-radius:6px;padding:4px 10px;color:#0f1115}
+ .t1{background:#34d399}.t2{background:#fbbf24}.t3{background:#f87171}
+ .name{font-size:16px;font-weight:600}.muted{color:#8a93a2}
+ .flag{margin-left:auto;background:#7c3aed;color:#fff;border-radius:6px;padding:4px 10px;font-size:12px}
+ .body{padding:14px 18px;display:grid;grid-template-columns:1fr 1fr;gap:18px}
+ .lab{color:#8a93a2;text-transform:uppercase;font-size:11px;letter-spacing:.04em;margin:10px 0 4px}
+ ul{margin:4px 0;padding-left:18px}a{color:#60a5fa}
+ .draft{grid-column:1/3;background:#0f1115;border:1px solid #262b36;border-radius:8px;padding:12px}
+ .agents{grid-column:1/3;font-size:12px;color:#9aa4b2}
+ .status{grid-column:1/3;font-size:12px;color:#8a93a2;border-top:1px dashed #262b36;padding-top:8px}
+ code{background:#0f1115;padding:1px 5px;border-radius:4px}
+</style></head><body>
+<header><h1>duvo-signal-loop — agent run report</h1>
+<div class="sub">{{ results|length }} accounts · scouts → analyst → router · audit log only</div></header>
+{% for r in results %}{% set s = r.score %}
+<div class="card">
+ <div class="top">
+  <span class="badge {% if s.tier=='Tier 1' %}t1{% elif s.tier=='Tier 2' %}t2{% else %}t3{% endif %}">{{ s.score }}/10</span>
+  <div><div class="name">{{ s.company_name }} <span class="muted">· {{ s.domain }}</span></div>
+   <div class="muted">{{ s.tier }} · confidence {{ s.confidence }} · {{ s.recommended_persona }}</div></div>
+  {% if s.needs_human_research %}<span class="flag">human research needed</span>{% endif %}
+ </div>
+ <div class="body">
+  <div><div class="lab">Why fit</div><ul>{% for w in s.why_fit %}<li>{{ w }}</li>{% endfor %}</ul>
+       <div class="lab">Angle</div><div>{{ s.recommended_angle }}</div></div>
+  <div><div class="lab">Signals ({{ r.signals|length }})</div><ul>
+       {% for g in r.signals %}<li><a href="{{ g.source_url }}" target="_blank">{{ g.signal_type }}</a>
+       <span class="muted">{{ g.published_date or 'no date' }}</span> — {{ g.title }}</li>{% endfor %}</ul></div>
+  <div class="draft"><div class="lab">Drafted outreach (paused — rep approves)</div>
+   <div><b>Subject:</b> {{ s.outreach.subject }}</div>
+   <div style="margin-top:6px">{{ s.outreach.first_line }}</div>
+   <div style="margin-top:6px" class="muted">{{ s.outreach.body }}</div></div>
+  <div class="agents"><div class="lab">Agent tool calls</div>
+   {% for a in r.agent_log %}<code>{{ a }}</code> {% endfor %}</div>
+  <div class="status">CRM: <code>{{ r.crm_status }}</code> ·
+   Slack: <code>{{ r.slack_status }}</code> · Outreach: <code>{{ r.outreach_status }}</code></div>
+ </div>
+</div>{% endfor %}
+</body></html>
