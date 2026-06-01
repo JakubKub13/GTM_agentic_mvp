@@ -61,7 +61,16 @@ duvo-signal-loop/
 
 ## Task 0: Scaffold
 
-**Files:** `requirements.txt`, `.env.example`, `companies.csv`, `tools/__init__.py`, `writeback/__init__.py`
+**Files:** `.gitignore`, `requirements.txt`, `.env.example`, `companies.csv`, `tools/__init__.py`, `writeback/__init__.py`
+
+`.gitignore` (create FIRST — prevents committing real keys / venv / output):
+```
+.env
+.venv/
+__pycache__/
+*.pyc
+output/
+```
 
 `requirements.txt`:
 ```
@@ -110,7 +119,11 @@ pip install -r requirements.txt
 cp .env.example .env   # fill keys
 ```
 
-**Commit:** `git add -A && git commit -m "scaffold: deps, env, target list"`
+**Commit:** (explicit adds — never `git add -A` here, `.env` must not be committed)
+```bash
+git add .gitignore requirements.txt .env.example companies.csv tools/__init__.py writeback/__init__.py
+git commit -m "scaffold: deps, env template, target list"
+```
 
 ---
 
@@ -692,11 +705,13 @@ Expected: `company <id> (icp_score=...) + evidence note`; confirm in HubSpot UI.
 
 **Files:** Create `router.py`
 
-The router is an agent whose tools are the write-backs. T0 ships it with only `hubspot_upsert`
-and `finish`; T1 adds `slack_alert`, T2 adds `lemlist_queue`. Tools self-guard and respect
-`dry_run`. Build the FULL version now (Slack/lemlist imports are lazy, so T0 works before those
-files exist as long as the router doesn't call them — but to keep T0 runnable standalone, the
-tool list is assembled conditionally).
+The router is an agent whose tools are the write-backs. Build the FULL version now: all four tools
+(`hubspot_upsert`, `slack_alert`, `lemlist_queue`, `finish`) are always registered, and the
+Slack/lemlist modules are imported **lazily inside their tool functions**. So in T0 — before
+`writeback/slack.py` and `writeback/lemlist.py` exist — a confident Tier 1 that triggers
+`slack_alert` raises `ImportError`, which `run_agent` catches and feeds back as `tool error: ...`;
+the run still completes. Once T1/T2 add those files, the same router lights up with no code change.
+Every tool also self-guards (refuses non-confident-Tier-1) and respects `dry_run`.
 
 ```python
 """Router agent: decides how to action a scored account; its tools are the write-backs."""
