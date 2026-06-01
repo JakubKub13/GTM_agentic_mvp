@@ -112,3 +112,17 @@ class TestAsyncKnobs:
         import config
         importlib.reload(config)
         assert config.ANTHROPIC_TIMEOUT_SECONDS == 120.0
+
+    def test_account_timeout_seconds_exists_and_is_float(self):
+        """ACCOUNT_TIMEOUT_SECONDS is present and is a float."""
+        import config
+        assert hasattr(config, "ACCOUNT_TIMEOUT_SECONDS")
+        assert isinstance(config.ACCOUNT_TIMEOUT_SECONDS, float)
+
+    def test_account_timeout_seconds_default(self, monkeypatch):
+        """ACCOUNT_TIMEOUT_SECONDS defaults to 300.0 (5 min) when env var is absent."""
+        monkeypatch.delenv("ACCOUNT_TIMEOUT_SECONDS", raising=False)
+        import importlib
+        import config
+        importlib.reload(config)
+        assert config.ACCOUNT_TIMEOUT_SECONDS == 300.0

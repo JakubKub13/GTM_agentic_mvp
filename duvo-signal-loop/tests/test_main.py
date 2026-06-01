@@ -1,7 +1,7 @@
-"""Tests for main.py — orchestrator: load_companies + run."""
+"""Tests for main.py — orchestrator: load_companies + async run."""
+import asyncio
 import csv
-import os
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -46,7 +46,7 @@ def _write_csv(path, rows: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# load_companies tests
+# load_companies tests (stay sync — load_companies is a sync function)
 # ---------------------------------------------------------------------------
 
 class TestLoadCompanies:
@@ -87,215 +87,189 @@ class TestLoadCompanies:
 
 
 # ---------------------------------------------------------------------------
-# run tests (all external calls patched)
+# run tests — all async, all external calls patched
 # ---------------------------------------------------------------------------
 
 PATCH_BASE = "main"
 
 
+def _two_companies() -> list[Company]:
+    return [
+        Company(name="Acme Corp", domain="acme.com", country="US", description="Desc A"),
+        Company(name="Beta Ltd", domain="beta.com", country="UK", description="Desc B"),
+    ]
+
+
+def _base_patches(companies: list[Company] | None = None):
+    """Return a dict of patch targets → mock objects for the standard happy-path setup."""
+    if companies is None:
+        companies = _two_companies()
+
+    mock_load = MagicMock(return_value=companies)
+    mock_scout = AsyncMock(return_value=[_make_signal()])
+    mock_analyst = AsyncMock(side_effect=lambda c, sigs, log=None: make_score(company_name=c.name))
+    mock_router = AsyncMock(return_value=None)
+    mock_report = MagicMock(return_value="output/run-report.html")
+    mock_aclose = AsyncMock(return_value=None)
+
+    return {
+        "load": mock_load,
+        "scout": mock_scout,
+        "analyst": mock_analyst,
+        "router": mock_router,
+        "report": mock_report,
+        "aclose": mock_aclose,
+    }
+
+
 class TestRun:
-    """Test the orchestrator run() function with all external calls mocked."""
+    """Test the async orchestrator run() with all external calls patched."""
 
-    def _setup_mocks(
-        self,
-        mock_load,
-        mock_scout,
-        mock_analyst,
-        mock_router,
-        mock_report,
-        companies: list[Company] | None = None,
-    ):
-        if companies is None:
-            companies = [
-                Company(name="Acme Corp", domain="acme.com", country="US", description="Desc A"),
-                Company(name="Beta Ltd", domain="beta.com", country="UK", description="Desc B"),
-            ]
-        mock_load.return_value = companies
-        mock_scout.return_value = [_make_signal()]
-        mock_analyst.side_effect = lambda c, sigs, log=None: make_score(company_name=c.name)
-        mock_router.return_value = None
-        mock_report.return_value = "output/run-report.html"
-
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_processes_all_companies(
-        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
-    ):
+    async def test_processes_all_companies(self):
         from main import run
 
-        self._setup_mocks(mock_load, mock_scout, mock_analyst, mock_router, mock_report)
-        run(dry_run=False, test_email="test@test.com", limit=None)
+        mocks = _base_patches()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None)
 
-        assert mock_scout.call_count == 2
-        assert mock_analyst.call_count == 2
-        assert mock_router.call_count == 2
+        assert mocks["scout"].call_count == 2
+        assert mocks["analyst"].call_count == 2
+        assert mocks["router"].call_count == 2
 
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_limit_is_respected(
-        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
-    ):
+    async def test_limit_is_respected(self):
         from main import run
 
         companies = [
             Company(name=f"Co{i}", domain=f"co{i}.com", country="US", description="")
             for i in range(5)
         ]
-        self._setup_mocks(mock_load, mock_scout, mock_analyst, mock_router, mock_report, companies=companies)
-        run(dry_run=False, test_email="test@test.com", limit=3)
+        mocks = _base_patches(companies=companies)
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=3)
 
-        assert mock_scout.call_count == 3
-        assert mock_analyst.call_count == 3
-        assert mock_router.call_count == 3
+        assert mocks["scout"].call_count == 3
+        assert mocks["analyst"].call_count == 3
+        assert mocks["router"].call_count == 3
 
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_run_router_receives_dry_run_flag(
-        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
-    ):
+    async def test_run_router_receives_dry_run_flag(self):
         from main import run
 
-        self._setup_mocks(mock_load, mock_scout, mock_analyst, mock_router, mock_report)
-        run(dry_run=True, test_email="rep@test.com", limit=None)
+        mocks = _base_patches()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+        ):
+            await run(dry_run=True, test_email="rep@test.com", limit=None)
 
-        # Every router call should receive dry_run=True
-        for c in mock_router.call_args_list:
-            # run_router(rr, dry_run, test_email, log) — positional args
-            args, kwargs = c
+        for call in mocks["router"].call_args_list:
+            args, kwargs = call
+            # run_router(rr, dry_run, test_email, agent_log) — positional args
             assert args[1] is True  # dry_run positional
 
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_generate_report_called_once_with_results_list(
-        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
-    ):
+    async def test_generate_report_called_once_with_results_list(self):
         from main import run
 
-        self._setup_mocks(mock_load, mock_scout, mock_analyst, mock_router, mock_report)
-        run(dry_run=False, test_email="test@test.com", limit=None)
+        mocks = _base_patches()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None)
 
-        assert mock_report.call_count == 1
-        results_arg = mock_report.call_args[0][0]
+        assert mocks["report"].call_count == 1
+        results_arg = mocks["report"].call_args[0][0]
         assert isinstance(results_arg, list)
         assert len(results_arg) == 2
         assert all(isinstance(r, RunResult) for r in results_arg)
 
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_run_results_have_agent_log_populated(
-        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
-    ):
-        """Each RunResult appended to results must carry the log list from the pipeline."""
+    async def test_run_results_have_agent_log_populated(self):
+        """Each RunResult passed to generate_report must carry the log list from the pipeline."""
         from main import run
 
-        # Simulate run_router mutating log (it appends to the log list in the real impl).
-        # Set up base mocks first, then override router.side_effect once.
-        self._setup_mocks(mock_load, mock_scout, mock_analyst, mock_router, mock_report)
+        mocks = _base_patches()
 
-        def fake_router(rr, dry_run, test_email, log=None):
+        async def fake_router(rr, dry_run, test_email, log=None):
             if log is not None:
                 log.append("router:crm_write()")
 
-        mock_router.side_effect = fake_router
+        mocks["router"].side_effect = fake_router
 
-        run(dry_run=False, test_email="test@test.com", limit=None)
-        results_arg = mock_report.call_args[0][0]
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None)
+
+        results_arg = mocks["report"].call_args[0][0]
         for rr in results_arg:
             assert "router:crm_write()" in rr.agent_log
 
-    @patch(f"{PATCH_BASE}.configure_logging")
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_configure_logging_is_invoked(
-        self,
-        mock_load,
-        mock_scout,
-        mock_analyst,
-        mock_router,
-        mock_report,
-        mock_sleep,
-        mock_configure,
-    ):
+    async def test_configure_logging_is_invoked(self):
         from main import run
 
-        self._setup_mocks(mock_load, mock_scout, mock_analyst, mock_router, mock_report)
-        run(dry_run=False, test_email="test@test.com", limit=None)
+        mocks = _base_patches()
+        mock_configure = MagicMock()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch(f"{PATCH_BASE}.configure_logging", mock_configure),
+            patch("http_client.aclose", mocks["aclose"]),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None)
 
         mock_configure.assert_called_once()
 
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_time_sleep_called_per_account(
-        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
-    ):
-        """time.sleep(0.3) is called once per company processed."""
+    async def test_run_router_receives_test_email(self):
         from main import run
 
-        self._setup_mocks(mock_load, mock_scout, mock_analyst, mock_router, mock_report)
-        run(dry_run=False, test_email="test@test.com", limit=None)
+        mocks = _base_patches()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+        ):
+            await run(dry_run=False, test_email="custom@example.com", limit=None)
 
-        assert mock_sleep.call_count == 2  # 2 companies
-        for c in mock_sleep.call_args_list:
-            assert c[0][0] == 0.3
-
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_run_router_receives_test_email(
-        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
-    ):
-        from main import run
-
-        self._setup_mocks(mock_load, mock_scout, mock_analyst, mock_router, mock_report)
-        run(dry_run=False, test_email="custom@example.com", limit=None)
-
-        for c in mock_router.call_args_list:
-            args, kwargs = c
+        for call in mocks["router"].call_args_list:
+            args, kwargs = call
             assert args[2] == "custom@example.com"  # test_email positional
 
-    @patch(f"{PATCH_BASE}.time.sleep")
-    @patch(f"{PATCH_BASE}.generate_report")
-    @patch(f"{PATCH_BASE}.run_router")
-    @patch(f"{PATCH_BASE}.run_analyst")
-    @patch(f"{PATCH_BASE}.scout_all")
-    @patch(f"{PATCH_BASE}.load_companies")
-    def test_one_account_failure_does_not_abort_batch_and_report_still_generated(
-        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
-    ):
+    async def test_one_account_failure_does_not_abort_batch_and_report_still_generated(self):
         """If one account raises inside run_analyst, run() must not raise, must still call
         generate_report once, and the results passed to it must contain only the successful
-        accounts (the failing one is skipped via continue)."""
+        accounts (the failing one is skipped)."""
         from main import run
 
         companies = [
@@ -303,20 +277,29 @@ class TestRun:
             Company(name="Bad Corp", domain="bad.com", country="DE", description="Boom"),
             Company(name="Also Good", domain="alsogood.com", country="PL", description="Fine"),
         ]
-        mock_load.return_value = companies
-        mock_scout.return_value = [_make_signal()]
-        mock_report.return_value = "output/run-report.html"
 
-        def analyst_side_effect(c, sigs, log=None):
+        async def analyst_side_effect(c, sigs, log=None):
             if c.name == "Bad Corp":
                 raise RuntimeError("Simulated transient API failure")
             return make_score(company_name=c.name)
 
-        mock_analyst.side_effect = analyst_side_effect
-        mock_router.return_value = None
+        mock_load = MagicMock(return_value=companies)
+        mock_scout = AsyncMock(return_value=[_make_signal()])
+        mock_analyst = AsyncMock(side_effect=analyst_side_effect)
+        mock_router = AsyncMock(return_value=None)
+        mock_report = MagicMock(return_value="output/run-report.html")
+        mock_aclose = AsyncMock(return_value=None)
 
         # Must not raise
-        run(dry_run=False, test_email="test@test.com", limit=None)
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mock_load),
+            patch(f"{PATCH_BASE}.scout_all", mock_scout),
+            patch(f"{PATCH_BASE}.run_analyst", mock_analyst),
+            patch(f"{PATCH_BASE}.run_router", mock_router),
+            patch(f"{PATCH_BASE}.generate_report", mock_report),
+            patch("http_client.aclose", mock_aclose),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None)
 
         # generate_report must be called exactly once
         assert mock_report.call_count == 1
@@ -329,3 +312,148 @@ class TestRun:
         assert "Good Corp" in successful_names
         assert "Also Good" in successful_names
         assert "Bad Corp" not in successful_names
+
+    async def test_http_client_aclose_awaited_on_success(self):
+        """http_client.aclose() must be awaited after a successful run."""
+        from main import run
+
+        mocks = _base_patches()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None)
+
+        mocks["aclose"].assert_awaited_once()
+
+    async def test_http_client_aclose_awaited_when_account_fails(self):
+        """http_client.aclose() must be awaited in finally even when an account raises."""
+        from main import run
+
+        mock_aclose = AsyncMock(return_value=None)
+        mock_load = MagicMock(return_value=_two_companies())
+        mock_report = MagicMock(return_value="output/run-report.html")
+
+        # Make all accounts fail
+        mock_scout = AsyncMock(side_effect=RuntimeError("Network error"))
+
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mock_load),
+            patch(f"{PATCH_BASE}.scout_all", mock_scout),
+            patch(f"{PATCH_BASE}.run_analyst", AsyncMock()),
+            patch(f"{PATCH_BASE}.run_router", AsyncMock()),
+            patch(f"{PATCH_BASE}.generate_report", mock_report),
+            patch("http_client.aclose", mock_aclose),
+        ):
+            # run() does not raise — errors are per-account isolated
+            await run(dry_run=False, test_email="test@test.com", limit=None)
+
+        # aclose must have been awaited despite all accounts failing
+        mock_aclose.assert_awaited_once()
+        # report still called with empty list
+        assert mock_report.call_count == 1
+        assert mock_report.call_args[0][0] == []
+
+    async def test_concurrency_parameter_accepted_and_used(self):
+        """run() accepts a concurrency kwarg and passes it to asyncio.Semaphore."""
+        from main import run
+
+        captured_values: list[int] = []
+        real_Semaphore = asyncio.Semaphore
+
+        def fake_Semaphore(value: int):
+            captured_values.append(value)
+            return real_Semaphore(value)
+
+        mocks = _base_patches()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+            patch(f"{PATCH_BASE}.asyncio.Semaphore", fake_Semaphore),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None, concurrency=7)
+
+        assert captured_values == [7], f"Expected semaphore(7), got {captured_values}"
+
+    async def test_concurrency_defaults_to_max_concurrent_accounts(self):
+        """When concurrency=None, the semaphore uses MAX_CONCURRENT_ACCOUNTS from config."""
+        from main import run
+        import config as cfg
+
+        captured_values: list[int] = []
+        real_Semaphore = asyncio.Semaphore
+
+        def fake_Semaphore(value: int):
+            captured_values.append(value)
+            return real_Semaphore(value)
+
+        mocks = _base_patches()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("http_client.aclose", mocks["aclose"]),
+            patch(f"{PATCH_BASE}.asyncio.Semaphore", fake_Semaphore),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None, concurrency=None)
+
+        assert captured_values == [cfg.MAX_CONCURRENT_ACCOUNTS], (
+            f"Expected semaphore({cfg.MAX_CONCURRENT_ACCOUNTS}), got {captured_values}"
+        )
+
+    async def test_account_timeout_excludes_slow_account_and_calls_generate_report(self):
+        """When an account's pipeline hangs beyond ACCOUNT_TIMEOUT_SECONDS, that account
+        is excluded from the results but run() does not raise and generate_report is still
+        called with the successful results."""
+        from main import run
+
+        companies = [
+            Company(name="Fast Corp", domain="fast.com", country="US", description="Fine"),
+            Company(name="Slow Corp", domain="slow.com", country="DE", description="Hangs"),
+        ]
+
+        async def scout_side_effect(company, agent_log):
+            if company.name == "Slow Corp":
+                # Sleep far longer than the tiny patched account timeout
+                await asyncio.sleep(10)
+            return [_make_signal()]
+
+        mock_load = MagicMock(return_value=companies)
+        mock_scout = AsyncMock(side_effect=scout_side_effect)
+        mock_analyst = AsyncMock(side_effect=lambda c, sigs, log=None: make_score(company_name=c.name))
+        mock_router = AsyncMock(return_value=None)
+        mock_report = MagicMock(return_value="output/run-report.html")
+        mock_aclose = AsyncMock(return_value=None)
+
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mock_load),
+            patch(f"{PATCH_BASE}.scout_all", mock_scout),
+            patch(f"{PATCH_BASE}.run_analyst", mock_analyst),
+            patch(f"{PATCH_BASE}.run_router", mock_router),
+            patch(f"{PATCH_BASE}.generate_report", mock_report),
+            patch("http_client.aclose", mock_aclose),
+            # Patch main.ACCOUNT_TIMEOUT_SECONDS — the module-level name _process_account reads
+            patch(f"{PATCH_BASE}.ACCOUNT_TIMEOUT_SECONDS", 0.01),
+        ):
+            # Must not raise
+            await run(dry_run=False, test_email="test@test.com", limit=None)
+
+        # generate_report must still be called
+        assert mock_report.call_count == 1
+
+        # Only the fast account should appear; the slow one timed out and returns None
+        results_arg = mock_report.call_args[0][0]
+        assert isinstance(results_arg, list)
+        successful_names = {rr.score.company_name for rr in results_arg}
+        assert "Fast Corp" in successful_names
+        assert "Slow Corp" not in successful_names
