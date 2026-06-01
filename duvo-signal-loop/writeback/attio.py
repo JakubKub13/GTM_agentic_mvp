@@ -1,5 +1,5 @@
 """Attio CRM write-back: create a company record + an evidence note (AI-suggested)."""
-import requests
+import http_client
 
 import config
 from config import require
@@ -39,7 +39,7 @@ def _note_body(score: ICPScore) -> str:
     return "\n".join(lines)
 
 
-def _create_company(score: ICPScore) -> str:
+async def _create_company(score: ICPScore) -> str:
     """POST a new company record to Attio.
 
     Tries first with ``domains`` included.  If Attio rejects that shape (any
@@ -62,7 +62,7 @@ def _create_company(score: ICPScore) -> str:
                 "Attio: first payload shape rejected — retrying with name-only for '%s'",
                 score.company_name,
             )
-        last = requests.post(url, headers=_headers(), json={"data": {"values": values}})
+        last = await http_client.get_client().post(url, headers=_headers(), json={"data": {"values": values}})
         if last.status_code < 300:
             record_id: str = last.json()["data"]["id"]["record_id"]
             log.info("Attio: company record created — record_id=%s", record_id)
@@ -78,7 +78,7 @@ def _create_company(score: ICPScore) -> str:
     return ""  # unreachable; satisfies type checkers
 
 
-def _create_note(score: ICPScore, record_id: str) -> None:
+async def _create_note(score: ICPScore, record_id: str) -> None:
     """POST an evidence note attached to the given company record."""
     payload = {
         "data": {
@@ -90,11 +90,12 @@ def _create_note(score: ICPScore, record_id: str) -> None:
         }
     }
     log.info("Attio: creating evidence note for record_id=%s", record_id)
-    requests.post(f"{_BASE}/notes", headers=_headers(), json=payload).raise_for_status()
+    resp = await http_client.get_client().post(f"{_BASE}/notes", headers=_headers(), json=payload)
+    resp.raise_for_status()
     log.info("Attio: evidence note created for record_id=%s", record_id)
 
 
-def upsert_account(score: ICPScore) -> str:
+async def upsert_account(score: ICPScore) -> str:
     """Create a company record + evidence note in Attio.
 
     Args:
@@ -103,6 +104,6 @@ def upsert_account(score: ICPScore) -> str:
     Returns:
         Confirmation string including the Attio record id and ICP score.
     """
-    record_id = _create_company(score)
-    _create_note(score, record_id)
+    record_id = await _create_company(score)
+    await _create_note(score, record_id)
     return f"attio company {record_id} (ICP {score.score}) + evidence note"

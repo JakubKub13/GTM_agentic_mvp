@@ -1,13 +1,13 @@
-"""Tests for writeback/hubspot.py — HubSpot CRM adapter."""
-from unittest.mock import MagicMock, patch
+"""Tests for writeback/hubspot.py — HubSpot CRM adapter (async httpx)."""
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 import config
-from models import ICPScore, OutreachDraft
-from writeback import hubspot
-from tests.conftest import _fake_response
+from models import ICPScore
+from tests.conftest import _fake_response, make_fake_async_client
 from tests.conftest import make_score as _make_score
+from writeback import hubspot
 
 
 # ---------------------------------------------------------------------------
@@ -80,28 +80,34 @@ class TestNoteBody:
 # ---------------------------------------------------------------------------
 
 class TestEnsureIcpProperty:
-    def test_does_not_post_when_property_exists(self, monkeypatch):
+    async def test_does_not_post_when_property_exists(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         get_resp = _fake_response(200)
+        client = make_fake_async_client(
+            get=AsyncMock(return_value=get_resp),
+            post=AsyncMock(return_value=_fake_response(200)),
+        )
 
-        with patch("writeback.hubspot.requests.get", return_value=get_resp) as mock_get, \
-             patch("writeback.hubspot.requests.post") as mock_post:
-            hubspot.ensure_icp_property()
+        with patch("http_client.get_client", return_value=client):
+            await hubspot.ensure_icp_property()
 
-        mock_get.assert_called_once()
-        mock_post.assert_not_called()
+        client.get.assert_called_once()
+        client.post.assert_not_called()
 
-    def test_posts_property_when_not_found(self, monkeypatch):
+    async def test_posts_property_when_not_found(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         get_resp = _fake_response(404)
         post_resp = _fake_response(201)
+        client = make_fake_async_client(
+            get=AsyncMock(return_value=get_resp),
+            post=AsyncMock(return_value=post_resp),
+        )
 
-        with patch("writeback.hubspot.requests.get", return_value=get_resp), \
-             patch("writeback.hubspot.requests.post", return_value=post_resp) as mock_post:
-            hubspot.ensure_icp_property()
+        with patch("http_client.get_client", return_value=client):
+            await hubspot.ensure_icp_property()
 
-        mock_post.assert_called_once()
-        call_json = mock_post.call_args[1]["json"]
+        client.post.assert_called_once()
+        call_json = client.post.call_args[1]["json"]
         assert call_json["name"] == "icp_score"
 
 
@@ -110,67 +116,84 @@ class TestEnsureIcpProperty:
 # ---------------------------------------------------------------------------
 
 class TestUpsertCompany:
-    def test_patches_existing_company_when_found(self, monkeypatch):
+    async def test_patches_existing_company_when_found(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         existing_id = "hs_existing_123"
         search_resp = _fake_response(200, {"results": [{"id": existing_id}]})
         patch_resp = _fake_response(200, {"id": existing_id})
 
-        with patch("writeback.hubspot.requests.post", return_value=search_resp), \
-             patch("writeback.hubspot.requests.patch", return_value=patch_resp) as mock_patch:
-            result = hubspot._upsert_company(make_score())
+        client = make_fake_async_client(
+            post=AsyncMock(return_value=search_resp),
+            patch=AsyncMock(return_value=patch_resp),
+        )
+
+        with patch("http_client.get_client", return_value=client):
+            result = await hubspot._upsert_company(make_score())
 
         assert result == existing_id
-        mock_patch.assert_called_once()
-        patch_url = mock_patch.call_args[0][0]
+        client.patch.assert_called_once()
+        patch_url = client.patch.call_args[0][0]
         assert existing_id in patch_url
 
-    def test_creates_new_company_when_not_found(self, monkeypatch):
+    async def test_creates_new_company_when_not_found(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         new_id = "hs_new_456"
         search_resp = _fake_response(200, {"results": []})
         create_resp = _fake_response(201, {"id": new_id})
 
-        with patch("writeback.hubspot.requests.post", side_effect=[search_resp, create_resp]) as mock_post, \
-             patch("writeback.hubspot.requests.patch") as mock_patch:
-            result = hubspot._upsert_company(make_score())
+        client = make_fake_async_client(
+            post=AsyncMock(side_effect=[search_resp, create_resp]),
+            patch=AsyncMock(return_value=_fake_response(200)),
+        )
+
+        with patch("http_client.get_client", return_value=client):
+            result = await hubspot._upsert_company(make_score())
 
         assert result == new_id
-        mock_patch.assert_not_called()
-        # Second post is the company creation
-        assert mock_post.call_count == 2
+        client.patch.assert_not_called()
+        assert client.post.call_count == 2
 
-    def test_patch_payload_contains_icp_score(self, monkeypatch):
+    async def test_patch_payload_contains_icp_score(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         existing_id = "hs_existing_789"
         search_resp = _fake_response(200, {"results": [{"id": existing_id}]})
         patch_resp = _fake_response(200, {"id": existing_id})
 
-        with patch("writeback.hubspot.requests.post", return_value=search_resp), \
-             patch("writeback.hubspot.requests.patch", return_value=patch_resp) as mock_patch:
-            hubspot._upsert_company(make_score())
+        client = make_fake_async_client(
+            post=AsyncMock(return_value=search_resp),
+            patch=AsyncMock(return_value=patch_resp),
+        )
 
-        props = mock_patch.call_args[1]["json"]["properties"]
+        with patch("http_client.get_client", return_value=client):
+            await hubspot._upsert_company(make_score())
+
+        props = client.patch.call_args[1]["json"]["properties"]
         assert props["icp_score"] == 7
 
-    def test_search_post_raises_on_non_2xx(self, monkeypatch):
+    async def test_search_post_raises_on_non_2xx(self, monkeypatch):
         """Non-2xx on the search POST must propagate (raise_for_status is called)."""
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         error_resp = _fake_response(400, raise_on_raise=True)
 
-        with patch("writeback.hubspot.requests.post", return_value=error_resp):
-            with pytest.raises(Exception, match="HTTP 400"):
-                hubspot._upsert_company(make_score())
+        client = make_fake_async_client(post=AsyncMock(return_value=error_resp))
 
-    def test_create_post_raises_on_non_2xx(self, monkeypatch):
+        with patch("http_client.get_client", return_value=client):
+            with pytest.raises(Exception, match="HTTP 400"):
+                await hubspot._upsert_company(make_score())
+
+    async def test_create_post_raises_on_non_2xx(self, monkeypatch):
         """Non-2xx on the company-creation POST must propagate (raise_for_status is called)."""
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         search_resp = _fake_response(200, {"results": []})
         error_resp = _fake_response(500, raise_on_raise=True)
 
-        with patch("writeback.hubspot.requests.post", side_effect=[search_resp, error_resp]):
+        client = make_fake_async_client(
+            post=AsyncMock(side_effect=[search_resp, error_resp]),
+        )
+
+        with patch("http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 500"):
-                hubspot._upsert_company(make_score())
+                await hubspot._upsert_company(make_score())
 
 
 # ---------------------------------------------------------------------------
@@ -178,14 +201,16 @@ class TestUpsertCompany:
 # ---------------------------------------------------------------------------
 
 class TestCreateNote:
-    def test_note_post_raises_on_non_2xx(self, monkeypatch):
+    async def test_note_post_raises_on_non_2xx(self, monkeypatch):
         """Non-2xx on the notes POST must propagate (raise_for_status is called)."""
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         error_resp = _fake_response(503, raise_on_raise=True)
 
-        with patch("writeback.hubspot.requests.post", return_value=error_resp):
+        client = make_fake_async_client(post=AsyncMock(return_value=error_resp))
+
+        with patch("http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 503"):
-                hubspot._create_note(make_score(), "company_123")
+                await hubspot._create_note(make_score(), "company_123")
 
 
 # ---------------------------------------------------------------------------
@@ -193,7 +218,7 @@ class TestCreateNote:
 # ---------------------------------------------------------------------------
 
 class TestUpsertAccount:
-    def test_returns_string_with_company_id_and_score(self, monkeypatch):
+    async def test_returns_string_with_company_id_and_score(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         company_id = "hs_chain_001"
 
@@ -202,14 +227,18 @@ class TestUpsertAccount:
         create_resp = _fake_response(201, {"id": company_id})
         note_resp = _fake_response(201, {"id": "note_001"})
 
-        with patch("writeback.hubspot.requests.get", return_value=get_resp), \
-             patch("writeback.hubspot.requests.post", side_effect=[search_resp, create_resp, note_resp]):
-            result = hubspot.upsert_account(make_score())
+        client = make_fake_async_client(
+            get=AsyncMock(return_value=get_resp),
+            post=AsyncMock(side_effect=[search_resp, create_resp, note_resp]),
+        )
+
+        with patch("http_client.get_client", return_value=client):
+            result = await hubspot.upsert_account(make_score())
 
         assert company_id in result
         assert "7" in result  # icp_score
 
-    def test_result_mentions_evidence_note(self, monkeypatch):
+    async def test_result_mentions_evidence_note(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         company_id = "hs_chain_002"
 
@@ -218,9 +247,13 @@ class TestUpsertAccount:
         create_resp = _fake_response(201, {"id": company_id})
         note_resp = _fake_response(201)
 
-        with patch("writeback.hubspot.requests.get", return_value=get_resp), \
-             patch("writeback.hubspot.requests.post", side_effect=[search_resp, create_resp, note_resp]):
-            result = hubspot.upsert_account(make_score())
+        client = make_fake_async_client(
+            get=AsyncMock(return_value=get_resp),
+            post=AsyncMock(side_effect=[search_resp, create_resp, note_resp]),
+        )
+
+        with patch("http_client.get_client", return_value=client):
+            result = await hubspot.upsert_account(make_score())
 
         assert "evidence note" in result
 

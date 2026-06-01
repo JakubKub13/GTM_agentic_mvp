@@ -1,5 +1,5 @@
 """lemlist adapter: queue a Tier-1 lead into a PAUSED campaign as a draft. Same interface as brevo."""
-import requests
+import http_client
 
 import config
 from config import require
@@ -11,7 +11,7 @@ log = get_logger(__name__)
 _BASE = "https://api.lemlist.com/api"
 
 
-def queue_lead(score: ICPScore, test_email: str) -> str:
+async def queue_lead(score: ICPScore, test_email: str) -> str:
     """Add the lead to a paused lemlist campaign for rep review before sending.
 
     Args:
@@ -23,7 +23,7 @@ def queue_lead(score: ICPScore, test_email: str) -> str:
 
     Raises:
         RuntimeError: When ``LEMLIST_CAMPAIGN_ID`` or ``LEMLIST_API_KEY`` is not configured.
-        requests.HTTPError: When lemlist responds with a non-2xx status code.
+        httpx.HTTPStatusError: When lemlist responds with a non-2xx status code.
     """
     # Check API key first so its error takes precedence over campaign id when both are missing
     api_key = require("LEMLIST_API_KEY", config.LEMLIST_API_KEY)
@@ -44,7 +44,7 @@ def queue_lead(score: ICPScore, test_email: str) -> str:
         "icebreaker": score.outreach.first_line,
     }
 
-    r = requests.post(
+    r = await http_client.get_client().post(
         url,
         auth=("", api_key),
         json=payload,

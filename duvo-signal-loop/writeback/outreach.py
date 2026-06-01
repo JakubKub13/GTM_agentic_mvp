@@ -6,7 +6,7 @@ from models import ICPScore
 log = get_logger(__name__)
 
 
-def queue_lead(score: ICPScore, test_email: str) -> str:
+async def queue_lead(score: ICPScore, test_email: str) -> str:
     """Queue a Tier-1 lead into the configured outreach provider's review list/paused campaign.
 
     The provider is chosen at call time by reading ``config.OUTREACH_PROVIDER`` so that
@@ -24,10 +24,10 @@ def queue_lead(score: ICPScore, test_email: str) -> str:
 
     if provider == "lemlist":
         from writeback import lemlist
-        return lemlist.queue_lead(score, test_email)
+        return await lemlist.queue_lead(score, test_email)
 
     if provider != "brevo":
         log.warning("unknown OUTREACH_PROVIDER=%r — defaulting to brevo", provider)
 
     from writeback import brevo
-    return brevo.queue_lead(score, test_email)
+    return await brevo.queue_lead(score, test_email)
