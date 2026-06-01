@@ -359,33 +359,35 @@ class TestLazyImports:
         assert hasattr(router, "run_router")
         assert hasattr(router, "_tool_schema")
 
-    def test_slack_real_mode_raises_import_error_without_crashing_router(self):
-        """In real mode with slack missing, calling slack_alert raises ImportError inside tool.
+    def test_slack_real_mode_raises_runtime_error_without_crashing_router(self):
+        """In real mode with SLACK_WEBHOOK_URL missing, calling slack_alert raises RuntimeError.
 
-        The fake run_agent here captures the ImportError rather than letting it
+        The fake run_agent here captures the RuntimeError rather than letting it
         propagate — consistent with how run_agent catches tool exceptions in prod.
+        The module now exists; the guard is on the missing env var, not the module.
         """
+        import config as _cfg
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
-
-        # Ensure writeback.slack is absent from sys.modules
-        sys.modules.pop("writeback.slack", None)
-        sys.modules.pop("writeback.outreach", None)
 
         error_captured = {}
 
         def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             try:
                 impls["slack_alert"]()
-            except (ImportError, ModuleNotFoundError) as e:
+            except RuntimeError as e:
                 error_captured["err"] = str(e)
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
-            # Should not crash at the router level
-            router.run_router(rr, dry_run=False)
+        original = _cfg.SLACK_WEBHOOK_URL
+        _cfg.SLACK_WEBHOOK_URL = ""
+        try:
+            with patch("router.run_agent", side_effect=capturing_run_agent):
+                router.run_router(rr, dry_run=False)
+        finally:
+            _cfg.SLACK_WEBHOOK_URL = original
 
-        # The ImportError should have been raised inside the tool, not propagated up
-        assert "err" in error_captured, "Expected ImportError was not raised"
-        assert "slack" in error_captured["err"]
+        # RuntimeError for missing env var should be raised inside the tool, not propagated
+        assert "err" in error_captured, "Expected RuntimeError was not raised"
+        assert "SLACK_WEBHOOK_URL" in error_captured["err"]
 
 
 # ---------------------------------------------------------------------------
