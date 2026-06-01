@@ -283,3 +283,49 @@ class TestRun:
         for c in mock_router.call_args_list:
             args, kwargs = c
             assert args[2] == "custom@example.com"  # test_email positional
+
+    @patch(f"{PATCH_BASE}.time.sleep")
+    @patch(f"{PATCH_BASE}.generate_report")
+    @patch(f"{PATCH_BASE}.run_router")
+    @patch(f"{PATCH_BASE}.run_analyst")
+    @patch(f"{PATCH_BASE}.scout_all")
+    @patch(f"{PATCH_BASE}.load_companies")
+    def test_one_account_failure_does_not_abort_batch_and_report_still_generated(
+        self, mock_load, mock_scout, mock_analyst, mock_router, mock_report, mock_sleep
+    ):
+        """If one account raises inside run_analyst, run() must not raise, must still call
+        generate_report once, and the results passed to it must contain only the successful
+        accounts (the failing one is skipped via continue)."""
+        from main import run
+
+        companies = [
+            Company(name="Good Corp", domain="good.com", country="US", description="Fine"),
+            Company(name="Bad Corp", domain="bad.com", country="DE", description="Boom"),
+            Company(name="Also Good", domain="alsogood.com", country="PL", description="Fine"),
+        ]
+        mock_load.return_value = companies
+        mock_scout.return_value = [_make_signal()]
+        mock_report.return_value = "output/run-report.html"
+
+        def analyst_side_effect(c, sigs, log=None):
+            if c.name == "Bad Corp":
+                raise RuntimeError("Simulated transient API failure")
+            return make_score(company_name=c.name)
+
+        mock_analyst.side_effect = analyst_side_effect
+        mock_router.return_value = None
+
+        # Must not raise
+        run(dry_run=False, test_email="test@test.com", limit=None)
+
+        # generate_report must be called exactly once
+        assert mock_report.call_count == 1
+
+        # Results must contain only the 2 successful accounts, not Bad Corp
+        results_arg = mock_report.call_args[0][0]
+        assert isinstance(results_arg, list)
+        assert len(results_arg) == 2
+        successful_names = {rr.score.company_name for rr in results_arg}
+        assert "Good Corp" in successful_names
+        assert "Also Good" in successful_names
+        assert "Bad Corp" not in successful_names

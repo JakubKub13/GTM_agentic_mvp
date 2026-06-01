@@ -177,6 +177,30 @@ class TestScoreClamping:
             result = run_analyst(company, signals)
         assert result.score == 10
 
+    def test_non_numeric_score_string_returns_conservative_score(self):
+        """If the model returns a non-numeric score like 'high', run_analyst must not crash
+        and must return a valid ICPScore with a conservative score in [1, 10]."""
+        assessment = {**VALID_ASSESSMENT, "score": "high"}
+        company = _make_company()
+        signals = [_make_signal()]
+        fake = _make_fake_run_agent(assessment)
+        with patch("analyst.run_agent", side_effect=fake):
+            result = run_analyst(company, signals)
+        assert isinstance(result, ICPScore)
+        assert 1 <= result.score <= 10
+
+    def test_none_score_returns_conservative_score(self):
+        """If the model returns None as score, run_analyst must not crash and must return
+        a valid ICPScore with a conservative score in [1, 10]."""
+        assessment = {**VALID_ASSESSMENT, "score": None}
+        company = _make_company()
+        signals = [_make_signal()]
+        fake = _make_fake_run_agent(assessment)
+        with patch("analyst.run_agent", side_effect=fake):
+            result = run_analyst(company, signals)
+        assert isinstance(result, ICPScore)
+        assert 1 <= result.score <= 10
+
 
 # ---------------------------------------------------------------------------
 # TestTierConfidenceCoercion

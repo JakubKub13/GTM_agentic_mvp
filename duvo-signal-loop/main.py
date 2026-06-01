@@ -64,23 +64,28 @@ def run(
         log.info("-> %s", c.name)
         agent_log: list[str] = []
 
-        signals = scout_all(c, agent_log)
-        score = run_analyst(c, signals, agent_log)
-        # router mutates rr's statuses in place; attach the full agent_log afterward.
-        rr = RunResult(score=score, signals=signals)
-        run_router(rr, dry_run, test_email, agent_log)
-        rr.agent_log = agent_log
-        results.append(rr)
+        try:
+            signals = scout_all(c, agent_log)
+            score = run_analyst(c, signals, agent_log)
+            # router mutates rr's statuses in place; attach the full agent_log afterward.
+            rr = RunResult(score=score, signals=signals)
+            run_router(rr, dry_run, test_email, agent_log)
+            rr.agent_log = agent_log
+            results.append(rr)
 
-        log.info(
-            "%d/10 %s conf=%s human=%s (%d signals, %d tool calls)",
-            score.score,
-            score.tier,
-            score.confidence,
-            score.needs_human_research,
-            len(signals),
-            len(agent_log),
-        )
+            log.info(
+                "%d/10 %s conf=%s human=%s (%d signals, %d tool calls)",
+                score.score,
+                score.tier,
+                score.confidence,
+                score.needs_human_research,
+                len(signals),
+                len(agent_log),
+            )
+        except Exception as exc:
+            log.error("account %s failed: %s", c.name, exc)
+            continue
+
         time.sleep(0.3)
 
     path = generate_report(results)

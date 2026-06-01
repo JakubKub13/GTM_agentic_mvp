@@ -117,8 +117,16 @@ def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPScore:
     # --- Defensive coercions before model construction ---
 
     raw_score = captured.get("score", 3)
-    clamped_score = max(1, min(10, int(raw_score)))
-    if clamped_score != int(raw_score):
+    try:
+        int_score = int(raw_score)
+    except (ValueError, TypeError):
+        _log.warning(
+            "analyst: non-numeric score %r — falling back to conservative score 3 for company=%r",
+            raw_score, company.name,
+        )
+        int_score = 3
+    clamped_score = max(1, min(10, int_score))
+    if clamped_score != int_score:
         _log.warning(
             "analyst: score out of range (got %r) — clamped to %d for company=%r",
             raw_score, clamped_score, company.name,
