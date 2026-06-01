@@ -1,13 +1,16 @@
 """Tests for router.py — the GTM routing agent.
 
-Strategy: patch ``router.run_agent`` with a configurable fake that calls a sequence
+Strategy: patch ``router.run_agent`` with a configurable async fake that calls a sequence
 of tool names from the ``impls`` dict directly, simulating the agent's decisions
 without touching the Anthropic API.
+
+All tool impls are now async coroutines, so the fake run_agent must await them.
+All tests calling run_router are async (pytest-asyncio auto mode).
 """
 from __future__ import annotations
 
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -27,16 +30,19 @@ def _make_run_result(**kwargs) -> RunResult:
 
 
 def _fake_run_agent_factory(tool_sequence: list[str]):
-    """Return a fake ``run_agent`` that calls the given tool names in order.
+    """Return an async fake ``run_agent`` that awaits the given tool impls in order.
 
     The fake accepts the same signature as the real ``run_agent`` and invokes
-    ``impls[name]()`` for each name in *tool_sequence*.  This simulates the
+    ``await impls[name]()`` for each name in *tool_sequence*.  This simulates the
     agent deciding which tools to call without any real Anthropic API calls.
+
+    Tool impls are now async coroutines, so they must be awaited here — just as
+    the real run_agent does via ``inspect.isawaitable`` / ``await output``.
     """
-    def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+    async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
         for name in tool_sequence:
             if name in impls:
-                result = impls[name]()
+                result = await impls[name]()
                 if log is not None:
                     log.append(f"{name}()")
         return []  # router ignores the return value
@@ -73,19 +79,19 @@ class TestToolSchema:
         assert isinstance(router.ROUTER_SYSTEM, str)
         assert len(router.ROUTER_SYSTEM) > 20
 
-    def test_tool_names_are_correct(self):
+    async def test_tool_names_are_correct(self):
         expected_names = {"crm_upsert", "slack_alert", "outreach_queue", "finish"}
         # Reconstruct tool list by looking at what run_router would register.
-        # We do this by running with a no-op fake and inspecting the tools arg.
+        # We do this by running with a no-op async fake and inspecting the tools arg.
         rr = _make_run_result()
         captured = {}
 
-        def capture_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+        async def capture_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             captured["tool_names"] = {t["name"] for t in tools}
             captured["impl_names"] = set(impls.keys())
 
         with patch("router.run_agent", side_effect=capture_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert captured["tool_names"] == expected_names
         assert captured["impl_names"] == expected_names
@@ -98,50 +104,50 @@ class TestToolSchema:
 class TestDryRunConfidentTier1:
     """All three write-backs produce [dry-run] strings; no real adapters called."""
 
-    def test_crm_status_dry_run_string(self, monkeypatch):
+    async def test_crm_status_dry_run_string(self, monkeypatch):
         monkeypatch.setattr(config, "CRM_PROVIDER", "attio")
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(
                 ["crm_upsert", "slack_alert", "outreach_queue", "finish"])):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "[dry-run]" in rr.crm_status
         assert "attio" in rr.crm_status
         assert str(rr.score.score) in rr.crm_status  # ICP score appears in string
 
-    def test_slack_status_dry_run_string(self, monkeypatch):
+    async def test_slack_status_dry_run_string(self, monkeypatch):
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(
                 ["crm_upsert", "slack_alert", "outreach_queue", "finish"])):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "[dry-run]" in rr.slack_status
 
-    def test_outreach_status_dry_run_string(self, monkeypatch):
+    async def test_outreach_status_dry_run_string(self, monkeypatch):
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "brevo")
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(
                 ["crm_upsert", "slack_alert", "outreach_queue", "finish"])):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "[dry-run]" in rr.outreach_status
         assert "brevo" in rr.outreach_status
 
-    def test_no_real_crm_called_in_dry_run(self, monkeypatch):
+    async def test_no_real_crm_called_in_dry_run(self, monkeypatch):
         """writeback.crm.upsert_account must NOT be called in dry-run mode."""
-        mock_upsert = MagicMock(return_value="should not be used")
+        mock_upsert = AsyncMock(return_value="should not be used")
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
              patch("writeback.crm.upsert_account", mock_upsert):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         mock_upsert.assert_not_called()
 
-    def test_provider_names_reflect_monkeypatched_values(self, monkeypatch):
+    async def test_provider_names_reflect_monkeypatched_values(self, monkeypatch):
         """dry-run status strings read CRM/OUTREACH_PROVIDER at call time."""
         monkeypatch.setattr(config, "CRM_PROVIDER", "hubspot")
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "lemlist")
@@ -149,7 +155,7 @@ class TestDryRunConfidentTier1:
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(
                 ["crm_upsert", "outreach_queue"])):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "hubspot" in rr.crm_status
         assert "lemlist" in rr.outreach_status
@@ -167,16 +173,16 @@ class TestSafetyGuards:
         ("Tier 2", False),  # not Tier 1
         ("Tier 3", False),  # not Tier 1
     ])
-    def test_slack_alert_refuses(self, tier, needs_human_research):
+    async def test_slack_alert_refuses(self, tier, needs_human_research):
         rr = _make_run_result(tier=tier, needs_human_research=needs_human_research)
         captured_return = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
-            result = impls["slack_alert"]()
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            result = await impls["slack_alert"]()
             captured_return["slack"] = result
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "refused" in captured_return["slack"]
         assert "not a confident Tier 1" in captured_return["slack"]
@@ -188,27 +194,27 @@ class TestSafetyGuards:
         ("Tier 2", False),
         ("Tier 3", False),
     ])
-    def test_outreach_queue_refuses(self, tier, needs_human_research):
+    async def test_outreach_queue_refuses(self, tier, needs_human_research):
         rr = _make_run_result(tier=tier, needs_human_research=needs_human_research)
         captured_return = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
-            result = impls["outreach_queue"]()
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            result = await impls["outreach_queue"]()
             captured_return["outreach"] = result
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "refused" in captured_return["outreach"]
         assert "not a confident Tier 1" in captured_return["outreach"]
         assert rr.outreach_status == "skipped"
 
-    def test_crm_always_allowed_for_non_tier1(self):
+    async def test_crm_always_allowed_for_non_tier1(self):
         """crm_upsert has no tier guard and succeeds for any tier in dry-run."""
         rr = _make_run_result(tier="Tier 2", needs_human_research=False)
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "[dry-run]" in rr.crm_status
 
@@ -220,45 +226,45 @@ class TestSafetyGuards:
 class TestConfidentT1Logic:
     """Verify the boolean gate: tier=='Tier 1' AND needs_human_research==False."""
 
-    def test_tier1_no_research_tools_allowed(self):
+    async def test_tier1_no_research_tools_allowed(self):
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
         captured = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
-            captured["slack"] = impls["slack_alert"]()
-            captured["outreach"] = impls["outreach_queue"]()
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            captured["slack"] = await impls["slack_alert"]()
+            captured["outreach"] = await impls["outreach_queue"]()
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         # Both should NOT be refused
         assert "refused" not in captured["slack"]
         assert "refused" not in captured["outreach"]
 
-    def test_tier1_with_research_flag_refuses(self):
+    async def test_tier1_with_research_flag_refuses(self):
         rr = _make_run_result(tier="Tier 1", needs_human_research=True)
         captured = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
-            captured["slack"] = impls["slack_alert"]()
-            captured["outreach"] = impls["outreach_queue"]()
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            captured["slack"] = await impls["slack_alert"]()
+            captured["outreach"] = await impls["outreach_queue"]()
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "refused" in captured["slack"]
         assert "refused" in captured["outreach"]
 
-    def test_tier2_refuses_both_guarded_tools(self):
+    async def test_tier2_refuses_both_guarded_tools(self):
         rr = _make_run_result(tier="Tier 2", needs_human_research=False)
         captured = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
-            captured["slack"] = impls["slack_alert"]()
-            captured["outreach"] = impls["outreach_queue"]()
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            captured["slack"] = await impls["slack_alert"]()
+            captured["outreach"] = await impls["outreach_queue"]()
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert "refused" in captured["slack"]
         assert "refused" in captured["outreach"]
@@ -271,26 +277,51 @@ class TestConfidentT1Logic:
 class TestRealMode:
     """In real mode, writeback.crm.upsert_account is called and its return is stored."""
 
-    def test_crm_upsert_calls_real_crm_adapter(self):
+    async def test_crm_upsert_calls_real_crm_adapter(self):
         sentinel = "attio rec_abc (ICP 8) + evidence note"
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
-             patch("writeback.crm.upsert_account", return_value=sentinel) as mock_upsert:
-            router.run_router(rr, dry_run=False)
+             patch("writeback.crm.upsert_account", AsyncMock(return_value=sentinel)) as mock_upsert:
+            await router.run_router(rr, dry_run=False)
 
         mock_upsert.assert_called_once_with(rr.score)
         assert rr.crm_status == sentinel
 
-    def test_crm_status_is_set_to_adapter_return_value(self):
+    async def test_crm_status_is_set_to_adapter_return_value(self):
         expected = "hubspot company hs_999 (icp_score=8) + evidence note"
         rr = _make_run_result()
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
-             patch("writeback.crm.upsert_account", return_value=expected):
-            router.run_router(rr, dry_run=False)
+             patch("writeback.crm.upsert_account", AsyncMock(return_value=expected)):
+            await router.run_router(rr, dry_run=False)
 
         assert rr.crm_status == expected
+
+    async def test_slack_real_mode_confident_t1_calls_adapter(self):
+        """In real mode, confident Tier-1 slack_alert awaits slack.alert_tier1."""
+        sentinel = "alert posted to #sales"
+        rr = _make_run_result(tier="Tier 1", needs_human_research=False)
+
+        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["slack_alert"])), \
+             patch("writeback.slack.alert_tier1", AsyncMock(return_value=sentinel)) as mock_alert:
+            await router.run_router(rr, dry_run=False)
+
+        mock_alert.assert_awaited_once_with(rr.score)
+        assert rr.slack_status == sentinel
+
+    async def test_outreach_real_mode_confident_t1_calls_adapter(self):
+        """In real mode, confident Tier-1 outreach_queue awaits outreach.queue_lead."""
+        sentinel = "brevo contact enrolled"
+        rr = _make_run_result(tier="Tier 1", needs_human_research=False)
+        test_email = "rep@example.com"
+
+        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
+             patch("writeback.outreach.queue_lead", AsyncMock(return_value=sentinel)) as mock_queue:
+            await router.run_router(rr, dry_run=False, test_email=test_email)
+
+        mock_queue.assert_awaited_once_with(rr.score, test_email)
+        assert rr.outreach_status == sentinel
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +335,7 @@ class TestRealModeSafetyGuardBeforeImport:
         ("Tier 2", False),
         ("Tier 1", True),
     ])
-    def test_guard_fires_before_lazy_import(self, tier, needs_human_research):
+    async def test_guard_fires_before_lazy_import(self, tier, needs_human_research):
         """Prove the safety guard returns the refusal string BEFORE attempting to import
         writeback.slack or writeback.outreach, even in real mode (dry_run=False).
 
@@ -320,12 +351,12 @@ class TestRealModeSafetyGuardBeforeImport:
         rr = _make_run_result(tier=tier, needs_human_research=needs_human_research)
         captured_returns = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
-            captured_returns["slack"] = impls["slack_alert"]()
-            captured_returns["outreach"] = impls["outreach_queue"]()
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            captured_returns["slack"] = await impls["slack_alert"]()
+            captured_returns["outreach"] = await impls["outreach_queue"]()
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=False)
+            await router.run_router(rr, dry_run=False)
 
         # Both tools must return the refusal string
         assert captured_returns["slack"] == "refused: not a confident Tier 1 (safety guard)"
@@ -359,10 +390,10 @@ class TestLazyImports:
         assert hasattr(router, "run_router")
         assert hasattr(router, "_tool_schema")
 
-    def test_slack_real_mode_raises_runtime_error_without_crashing_router(self):
+    async def test_slack_real_mode_raises_runtime_error_without_crashing_router(self):
         """In real mode with SLACK_WEBHOOK_URL missing, calling slack_alert raises RuntimeError.
 
-        The fake run_agent here captures the RuntimeError rather than letting it
+        The async fake run_agent here captures the RuntimeError rather than letting it
         propagate — consistent with how run_agent catches tool exceptions in prod.
         The module now exists; the guard is on the missing env var, not the module.
         """
@@ -371,9 +402,9 @@ class TestLazyImports:
 
         error_captured = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             try:
-                impls["slack_alert"]()
+                await impls["slack_alert"]()
             except RuntimeError as e:
                 error_captured["err"] = str(e)
 
@@ -381,7 +412,7 @@ class TestLazyImports:
         _cfg.SLACK_WEBHOOK_URL = ""
         try:
             with patch("router.run_agent", side_effect=capturing_run_agent):
-                router.run_router(rr, dry_run=False)
+                await router.run_router(rr, dry_run=False)
         finally:
             _cfg.SLACK_WEBHOOK_URL = original
 
@@ -397,42 +428,42 @@ class TestLazyImports:
 class TestFinishAndLog:
     """finish() returns 'done'; log list is forwarded to run_agent."""
 
-    def test_finish_returns_done(self):
+    async def test_finish_returns_done(self):
         rr = _make_run_result()
         captured = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
-            captured["result"] = impls["finish"]()
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            captured["result"] = await impls["finish"]()
             captured["final_tools"] = set(final_tools)
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert captured["result"] == "done"
         assert "finish" in captured["final_tools"]
 
-    def test_log_forwarded_to_run_agent(self):
+    async def test_log_forwarded_to_run_agent(self):
         rr = _make_run_result()
         agent_log = []
         log_received = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             log_received["log"] = log
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True, log=agent_log)
+            await router.run_router(rr, dry_run=True, log=agent_log)
 
         assert log_received["log"] is agent_log
 
-    def test_max_turns_is_6(self):
+    async def test_max_turns_is_6(self):
         rr = _make_run_result()
         captured = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             captured["max_turns"] = max_turns
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         assert captured["max_turns"] == 6
 
@@ -444,16 +475,16 @@ class TestFinishAndLog:
 class TestUserMessage:
     """The user message passed to run_agent is a JSON object with the score fields."""
 
-    def test_user_message_is_valid_json(self):
+    async def test_user_message_is_valid_json(self):
         import json
         rr = _make_run_result(company_name="TestCo", domain="test.co", score=7, tier="Tier 2")
         captured = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             captured["user"] = user
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         data = json.loads(captured["user"])
         assert data["company"] == "TestCo"
@@ -461,16 +492,16 @@ class TestUserMessage:
         assert data["score"] == 7
         assert data["tier"] == "Tier 2"
 
-    def test_user_message_contains_routing_keys(self):
+    async def test_user_message_contains_routing_keys(self):
         import json
         rr = _make_run_result()
         captured = {}
 
-        def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             captured["user"] = user
 
         with patch("router.run_agent", side_effect=capturing_run_agent):
-            router.run_router(rr, dry_run=True)
+            await router.run_router(rr, dry_run=True)
 
         data = json.loads(captured["user"])
         for key in ("company", "domain", "score", "tier", "confidence",
