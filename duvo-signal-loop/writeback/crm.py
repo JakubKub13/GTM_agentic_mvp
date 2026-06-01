@@ -6,7 +6,7 @@ from models import ICPScore
 log = get_logger(__name__)
 
 
-def upsert_account(score: ICPScore) -> str:
+async def upsert_account(score: ICPScore) -> str:
     """Route the upsert to the configured CRM provider.
 
     Reads ``config.CRM_PROVIDER`` at call time so that tests can monkeypatch
@@ -23,7 +23,10 @@ def upsert_account(score: ICPScore) -> str:
 
     if provider == "hubspot":
         from writeback import hubspot
-        return hubspot.upsert_account(score)
+        return await hubspot.upsert_account(score)
+
+    if provider != "attio":
+        log.warning("unknown CRM_PROVIDER=%r — defaulting to attio", provider)
 
     from writeback import attio
-    return attio.upsert_account(score)
+    return await attio.upsert_account(score)

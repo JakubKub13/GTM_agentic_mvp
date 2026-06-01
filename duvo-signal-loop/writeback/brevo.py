@@ -1,5 +1,5 @@
 """Brevo outreach: create the contact in a Tier-1 review list. Never sends — a rep approves + sends."""
-import requests
+import http_client
 
 import config
 from config import require
@@ -20,7 +20,7 @@ def _headers() -> dict:
     }
 
 
-def queue_lead(score: ICPScore, test_email: str) -> str:
+async def queue_lead(score: ICPScore, test_email: str) -> str:
     """Add the lead as a contact to the Brevo review list.
 
     Tries first with the full rich payload (custom attributes). If Brevo rejects that
@@ -35,7 +35,7 @@ def queue_lead(score: ICPScore, test_email: str) -> str:
         A confirmation string mentioning the list id when the contact is queued.
 
     Raises:
-        requests.HTTPError: When both payloads fail (last response raises).
+        httpx.HTTPStatusError: When both payloads fail (last response raises).
     """
     list_id = int(require("BREVO_LIST_ID", config.BREVO_LIST_ID))
     log.info(
@@ -66,7 +66,7 @@ def queue_lead(score: ICPScore, test_email: str) -> str:
                 "brevo: full payload rejected — falling back to minimal payload for company=%s",
                 score.company_name,
             )
-        last = requests.post(f"{_BASE}/contacts", headers=_headers(), json=payload)
+        last = await http_client.get_client().post(f"{_BASE}/contacts", headers=_headers(), json=payload)
         if last.status_code < 300:
             log.info(
                 "brevo: contact queued successfully for company=%s list_id=%s",

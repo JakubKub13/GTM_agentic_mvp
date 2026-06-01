@@ -1,8 +1,9 @@
 """Reusable Anthropic tool-use loop — the runtime every agent in the system runs on."""
+import inspect
 from collections.abc import Callable, Iterable
 
-from anthropic import Anthropic
-from config import ANTHROPIC_API_KEY, CLAUDE_MODEL, require
+from anthropic import AsyncAnthropic
+from config import ANTHROPIC_API_KEY, ANTHROPIC_TIMEOUT_SECONDS, CLAUDE_MODEL, require
 from logging_setup import get_logger
 
 _log = get_logger(__name__)
@@ -10,31 +11,48 @@ _log = get_logger(__name__)
 _client = None
 
 
-def _get_client() -> Anthropic:
-    """Return the shared Anthropic client, initialising it on first use.
+def _get_client() -> AsyncAnthropic:
+    """Return the shared AsyncAnthropic client, initialising it on first use.
 
     Lazy init means the module can be imported in tests without a real API key;
     the key is only validated when an actual API call is made.
+
+    Lazy init is safe: the event loop is single-threaded and there is no await
+    between the None-check and assignment, so no concurrent double-construct can occur.
     """
-    # Double-construct race with parallel scout threads is benign under CPython's GIL; clients are stateless.
     global _client
     if _client is None:
-        _client = Anthropic(api_key=require("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY))
+        _client = AsyncAnthropic(
+            api_key=require("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY),
+            timeout=ANTHROPIC_TIMEOUT_SECONDS,
+        )
     return _client
 
 
-def run_agent(system: str, user: str, tools: list[dict], impls: dict[str, Callable], max_turns: int = 8, final_tools: Iterable[str] = (), log: list[str] | None = None) -> list:
-    """Drive a tool-using Anthropic agent to completion.
+async def run_agent(
+    system: str,
+    user: str,
+    tools: list[dict],
+    impls: dict[str, Callable],
+    max_turns: int = 8,
+    final_tools: Iterable[str] = (),
+    log: list[str] | None = None,
+) -> list:
+    """Drive a tool-using Anthropic agent to completion (async).
 
     Calls the model, dispatches any ``tool_use`` blocks through *impls*, feeds
     results back, and repeats until a final tool is called, the model returns
     no tool calls, or *max_turns* is exhausted.
 
+    Both synchronous and asynchronous tool impls are supported: if calling an
+    impl returns an awaitable it will be awaited automatically.
+
     Args:
         system:      System prompt string.
         user:        Initial user message string.
         tools:       List of Anthropic tool schema dicts to pass to the model.
-        impls:       Mapping of tool name → callable; called for each tool_use block.
+        impls:       Mapping of tool name → callable (sync or async); called
+                     for each tool_use block.
         max_turns:   Maximum number of model calls (default 8).
         final_tools: Iterable of tool names that, when called, terminate the loop.
         log:         Optional list; each tool call appends a short entry for the
@@ -49,7 +67,7 @@ def run_agent(system: str, user: str, tools: list[dict], impls: dict[str, Callab
     for turn in range(max_turns):
         _log.debug("agent turn %d / %d", turn + 1, max_turns)
 
-        resp = _get_client().messages.create(
+        resp = await _get_client().messages.create(
             model=CLAUDE_MODEL,
             max_tokens=2000,
             system=system,
@@ -66,8 +84,7 @@ def run_agent(system: str, user: str, tools: list[dict], impls: dict[str, Callab
         results = []
         hit_final = False
         for tu in tool_uses:
-            _log.info("tool called: %s", tu.name)
-            _log.debug("tool args: %s", _short(tu.input))
+            _log.info("tool called: %s(%s)", tu.name, _short(tu.input))
 
             if log is not None:
                 log.append(f"{tu.name}({_short(tu.input)})")
@@ -78,6 +95,8 @@ def run_agent(system: str, user: str, tools: list[dict], impls: dict[str, Callab
             else:
                 try:
                     output = impls[tu.name](**tu.input)
+                    if inspect.isawaitable(output):
+                        output = await output
                 except Exception as exc:
                     _log.warning("tool %s raised: %s", tu.name, exc)
                     output = f"tool error: {exc}"

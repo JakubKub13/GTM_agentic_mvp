@@ -1,7 +1,7 @@
 """HubSpot adapter: custom property + upsert company + evidence note. Same interface as attio."""
 import time
 
-import requests
+import http_client
 
 import config
 from config import require
@@ -22,7 +22,12 @@ def _headers() -> dict:
     }
 
 
-def ensure_icp_property() -> None:
+def _get_client():
+    """Convenience alias so call sites read naturally."""
+    return http_client.get_client()
+
+
+async def ensure_icp_property() -> None:
     """Ensure the ``icp_score`` custom property exists on HubSpot companies.
 
     If the property already exists (GET returns 200) we skip creation silently.
@@ -30,11 +35,12 @@ def ensure_icp_property() -> None:
     """
     url = f"{_BASE}/crm/v3/properties/companies/icp_score"
     log.debug("HubSpot: checking whether icp_score property exists")
-    if requests.get(url, headers=_headers()).status_code == 200:
+    resp = await _get_client().get(url, headers=_headers())
+    if resp.status_code == 200:
         log.debug("HubSpot: icp_score property already exists — skipping creation")
         return
     log.info("HubSpot: creating icp_score custom property on companies")
-    requests.post(
+    resp2 = await _get_client().post(
         f"{_BASE}/crm/v3/properties/companies",
         headers=_headers(),
         json={
@@ -44,10 +50,11 @@ def ensure_icp_property() -> None:
             "fieldType": "number",
             "groupName": "companyinformation",
         },
-    ).raise_for_status()
+    )
+    resp2.raise_for_status()
 
 
-def _upsert_company(score: ICPScore) -> str:
+async def _upsert_company(score: ICPScore) -> str:
     """Search for the company by domain; PATCH if found, POST if not.
 
     Returns:
@@ -65,7 +72,7 @@ def _upsert_company(score: ICPScore) -> str:
         ],
         "properties": ["domain", "name"],
     }
-    r = requests.post(
+    r = await _get_client().post(
         f"{_BASE}/crm/v3/objects/companies/search",
         headers=_headers(),
         json=search,
@@ -81,14 +88,15 @@ def _upsert_company(score: ICPScore) -> str:
     if results:
         cid: str = results[0]["id"]
         log.info("HubSpot: company found (id=%s) — PATCHing properties", cid)
-        requests.patch(
+        pr = await _get_client().patch(
             f"{_BASE}/crm/v3/objects/companies/{cid}",
             headers=_headers(),
             json={"properties": props},
-        ).raise_for_status()
+        )
+        pr.raise_for_status()
     else:
         log.info("HubSpot: company not found — creating new record for '%s'", score.company_name)
-        cr = requests.post(
+        cr = await _get_client().post(
             f"{_BASE}/crm/v3/objects/companies",
             headers=_headers(),
             json={"properties": props},
@@ -120,7 +128,7 @@ def _note_body(score: ICPScore) -> str:
     return "<br>".join(lines)
 
 
-def _create_note(score: ICPScore, company_id: str) -> None:
+async def _create_note(score: ICPScore, company_id: str) -> None:
     """Create a HubSpot note (engagement) associated with the company."""
     log.info("HubSpot: creating evidence note for company id=%s", company_id)
     payload = {
@@ -140,11 +148,12 @@ def _create_note(score: ICPScore, company_id: str) -> None:
             }
         ],
     }
-    requests.post(f"{_BASE}/crm/v3/objects/notes", headers=_headers(), json=payload).raise_for_status()
+    resp = await _get_client().post(f"{_BASE}/crm/v3/objects/notes", headers=_headers(), json=payload)
+    resp.raise_for_status()
     log.info("HubSpot: evidence note created for company id=%s", company_id)
 
 
-def upsert_account(score: ICPScore) -> str:
+async def upsert_account(score: ICPScore) -> str:
     """Ensure icp_score property exists, upsert the company, then attach a note.
 
     Args:
@@ -153,7 +162,7 @@ def upsert_account(score: ICPScore) -> str:
     Returns:
         Confirmation string including the HubSpot company id and ICP score.
     """
-    ensure_icp_property()
-    cid = _upsert_company(score)
-    _create_note(score, cid)
+    await ensure_icp_property()
+    cid = await _upsert_company(score)
+    await _create_note(score, cid)
     return f"company {cid} (icp_score={score.score}) + evidence note"

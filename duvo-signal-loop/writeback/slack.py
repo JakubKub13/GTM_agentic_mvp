@@ -1,5 +1,5 @@
 """Tier-1 alert to #sales via incoming webhook."""
-import requests
+import http_client
 
 import config
 from config import require
@@ -9,7 +9,7 @@ from models import ICPScore
 log = get_logger(__name__)
 
 
-def alert_tier1(score: ICPScore) -> str:
+async def alert_tier1(score: ICPScore) -> str:
     """Post a Tier-1 block-kit alert to the #sales Slack channel via incoming webhook.
 
     Args:
@@ -20,7 +20,7 @@ def alert_tier1(score: ICPScore) -> str:
 
     Raises:
         RuntimeError: When ``SLACK_WEBHOOK_URL`` is not configured.
-        requests.HTTPError: When Slack responds with a non-2xx status code.
+        httpx.HTTPStatusError: When Slack responds with a non-2xx status code.
     """
     webhook_url = require("SLACK_WEBHOOK_URL", config.SLACK_WEBHOOK_URL)
     log.info("slack: posting Tier-1 alert for company=%s score=%s", score.company_name, score.score)
@@ -55,7 +55,7 @@ def alert_tier1(score: ICPScore) -> str:
     ]
 
     try:
-        r = requests.post(
+        r = await http_client.get_client().post(
             webhook_url,
             json={"blocks": blocks, "text": f"Tier 1: {score.company_name}"},
         )

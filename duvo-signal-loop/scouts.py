@@ -1,5 +1,5 @@
 """Scout agents: one per signal beat, each a tool-using agent over exa_search."""
-from concurrent.futures import ThreadPoolExecutor
+import asyncio
 from typing import Literal
 
 from config import MAX_SCOUT_SEARCHES
@@ -47,17 +47,20 @@ SUBMIT_TOOL = {
 }
 
 
-def run_scout(company: Company,
-              beat_key: Literal["erp_migration", "hiring", "ma_leadership", "pain"],
-              beat_desc: str, log=None) -> list[Signal]:
+async def run_scout(
+    company: Company,
+    beat_key: Literal["erp_migration", "hiring", "ma_leadership", "pain"],
+    beat_desc: str,
+    log=None,
+) -> list[Signal]:
     """Run a single scout agent for one beat and return the signals it finds.
 
     Args:
         company:   The company to research.
         beat_key:  One of the four Literal signal_type values (matches the beat).
         beat_desc: Descriptive text for the scout's system prompt.
-        log:       Shared list for audit entries; list.append is atomic under the GIL
-                   so this is safe to share across the 4 parallel scout threads.
+        log:       Shared list for audit entries. With asyncio, all coroutines run
+                   on one event loop thread so list.append is safe with no locking.
 
     Returns:
         A list of Signal objects extracted from the agent's submit_signals call.
@@ -81,9 +84,11 @@ def run_scout(company: Company,
         captured["signals"] = signals
         return f"received {len(signals)} signals"
 
+    # exa_search is async — run_agent awaits awaitable impls automatically.
+    # submit_signals is sync — run_agent calls it directly.
     impls = {"exa_search": exa_search, "submit_signals": submit_signals}
-    run_agent(system, user, [EXA_SEARCH_TOOL, SUBMIT_TOOL], impls,
-              max_turns=MAX_SCOUT_SEARCHES + 2, final_tools={"submit_signals"}, log=log)
+    await run_agent(system, user, [EXA_SEARCH_TOOL, SUBMIT_TOOL], impls,
+                    max_turns=MAX_SCOUT_SEARCHES + 2, final_tools={"submit_signals"}, log=log)
 
     out = []
     for s in captured["signals"]:
@@ -100,32 +105,33 @@ def run_scout(company: Company,
     return out
 
 
-def _run_scout_safe(company: Company, beat_key: str, beat_desc: str, log=None) -> list[Signal]:
-    """Wrapper around run_scout that isolates per-beat failures.
+async def _run_scout_safe(company: Company, beat_key: Literal["erp_migration", "hiring", "ma_leadership", "pain"], beat_desc: str, log=None) -> list[Signal]:
+    """Async wrapper around run_scout that isolates per-beat failures.
 
     If run_scout raises for one beat, logs the error and returns [] so the
     other beats' results are not discarded.
     """
     try:
-        return run_scout(company, beat_key, beat_desc, log)
+        return await run_scout(company, beat_key, beat_desc, log)
     except Exception as exc:
         _log.error("scout beat=%s failed for company=%r: %s", beat_key, company.name, exc)
         return []
 
 
-def scout_all(company: Company, log=None) -> list[Signal]:
-    """Run all 4 scout agents in parallel for one company.
+async def scout_all(company: Company, log=None) -> list[Signal]:
+    """Run all 4 scout agents concurrently for one company via asyncio.gather.
 
     Args:
         company: The company to research.
-        log:     Shared audit log list passed to each scout. list.append is atomic
-                 under the GIL so sharing across 4 threads is safe.
+        log:     Shared audit log list passed to each scout. All coroutines run
+                 on one event loop thread — no locking needed for list.append.
 
     Returns:
         Flattened list of all Signal objects from all 4 beats.
     """
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        groups = list(ex.map(lambda b: _run_scout_safe(company, b[0], b[1], log), BEATS))
-    signals = [sig for group in groups for sig in group]
+    results = await asyncio.gather(
+        *[_run_scout_safe(company, key, desc, log) for key, desc in BEATS],
+    )
+    signals = [sig for group in results for sig in group]
     _log.info("scout_all done: company=%r total_signals=%d", company.name, len(signals))
     return signals

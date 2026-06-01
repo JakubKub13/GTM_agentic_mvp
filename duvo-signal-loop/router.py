@@ -39,7 +39,7 @@ def _tool_schema(name: str, desc: str) -> dict:
     }
 
 
-def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST_EMAIL, log=None) -> None:
+async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST_EMAIL, log=None) -> None:
     """Drive the routing agent to decide write-back actions for a scored account.
 
     The agent is given the ICP score and picks which write-back tools to call.
@@ -73,20 +73,22 @@ def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST_EMAIL
     )
 
     # ------------------------------------------------------------------
-    # Tool implementations
+    # Tool implementations (async closures — run_agent awaits them)
     # ------------------------------------------------------------------
 
-    def crm_upsert() -> str:
+    async def crm_upsert() -> str:
         if dry_run:
             status = f"[dry-run] upsert account + note into {config.CRM_PROVIDER} (ICP {s.score})"
             rr.crm_status = status
         else:
-            status = crm.upsert_account(s)
+            status = await crm.upsert_account(s)
             rr.crm_status = status
         _log.info("crm_upsert result: %s", status)
         return status
 
-    def slack_alert() -> str:
+    async def slack_alert() -> str:
+        # Safety guard MUST come first — before the lazy import and any await —
+        # so that a non-confident Tier-1 never imports or calls the send module.
         if not confident_t1:
             msg = "refused: not a confident Tier 1 (safety guard)"
             _log.info("slack_alert self-refused: %s", msg)
@@ -96,12 +98,14 @@ def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST_EMAIL
             rr.slack_status = status
         else:
             from writeback import slack  # lazy — module added in a later group
-            status = slack.alert_tier1(s)
+            status = await slack.alert_tier1(s)
             rr.slack_status = status
         _log.info("slack_alert result: %s", status)
         return status
 
-    def outreach_queue() -> str:
+    async def outreach_queue() -> str:
+        # Safety guard MUST come first — before the lazy import and any await —
+        # so that a non-confident Tier-1 never imports or calls the send module.
         if not confident_t1:
             msg = "refused: not a confident Tier 1 (safety guard)"
             _log.info("outreach_queue self-refused: %s", msg)
@@ -111,12 +115,12 @@ def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST_EMAIL
             rr.outreach_status = status
         else:
             from writeback import outreach  # lazy — module added in a later group
-            status = outreach.queue_lead(s, test_email)
+            status = await outreach.queue_lead(s, test_email)
             rr.outreach_status = status
         _log.info("outreach_queue result: %s", status)
         return status
 
-    def finish() -> str:
+    async def finish() -> str:
         """Signal the agent loop to terminate; routing is complete."""
         _log.info(
             "routing complete: company=%s crm=%s slack=%s outreach=%s",
@@ -169,4 +173,4 @@ def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST_EMAIL
         ensure_ascii=False,
     )
 
-    run_agent(ROUTER_SYSTEM, user, tools, impls, max_turns=6, final_tools={"finish"}, log=log)
+    await run_agent(ROUTER_SYSTEM, user, tools, impls, max_turns=6, final_tools={"finish"}, log=log)

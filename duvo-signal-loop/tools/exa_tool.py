@@ -1,4 +1,6 @@
 """exa_search — the tool scouts and the analyst use to search the web."""
+import asyncio
+
 from exa_py import Exa
 from config import EXA_API_KEY, require
 from logging_setup import get_logger
@@ -13,8 +15,10 @@ def _get_exa() -> Exa:
 
     Lazy init means the module can be imported in tests without a real API key;
     the key is only validated when an actual search is attempted.
+
+    Double-construct race with a single event loop is benign under CPython's GIL;
+    clients are stateless.
     """
-    # Double-construct race with parallel scout threads is benign under CPython's GIL; clients are stateless.
     global _exa
     if _exa is None:
         _exa = Exa(api_key=require("EXA_API_KEY", EXA_API_KEY))
@@ -45,13 +49,15 @@ EXA_SEARCH_TOOL = {
 }
 
 
-def exa_search(query: str, start_published_date: str | None = None) -> str:
-    """Search the web via Exa and return a formatted string of results.
+def _search_sync(query: str, start_published_date: str | None) -> str:
+    """Synchronous search + formatting logic — runs in a worker thread.
+
+    Contains the existing search_and_contents call and result formatting so
+    the event loop is not blocked by exa-py's synchronous HTTP call.
 
     Args:
         query:               Focused search query.
-        start_published_date: Optional ISO date (YYYY-MM-DD); only results
-                             published on or after this date are returned.
+        start_published_date: Optional ISO date (YYYY-MM-DD).
 
     Returns:
         A newline-joined string with TITLE / DATE / URL / SUMMARY for each
@@ -86,3 +92,22 @@ def exa_search(query: str, start_published_date: str | None = None) -> str:
             f"  SUMMARY: {summary[:400]}"
         )
     return "\n".join(lines) if lines else "no results"
+
+
+async def exa_search(query: str, start_published_date: str | None = None) -> str:
+    """Search the web via Exa and return a formatted string of results (async).
+
+    exa-py is sync-only, so the blocking call is offloaded to a worker thread
+    via ``asyncio.to_thread`` to keep the event loop responsive.
+
+    Args:
+        query:               Focused search query.
+        start_published_date: Optional ISO date (YYYY-MM-DD); only results
+                             published on or after this date are returned.
+
+    Returns:
+        A newline-joined string with TITLE / DATE / URL / SUMMARY for each
+        result, or ``"no results"`` when the response is empty, or a
+        ``"search failed: <error>"`` string on exception.
+    """
+    return await asyncio.to_thread(_search_sync, query, start_published_date)

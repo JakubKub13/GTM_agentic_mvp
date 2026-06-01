@@ -56,7 +56,18 @@ _VALID_TIERS = {"Tier 1", "Tier 2", "Tier 3"}
 _VALID_CONFIDENCES = {"high", "medium", "low"}
 
 
-def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPScore:
+def _conservative_default(company: Company) -> ICPScore:
+    """Return a conservative-default ICPScore for a company when the agent produces nothing usable."""
+    return ICPScore(
+        company_name=company.name, domain=company.domain, score=3, tier="Tier 3",
+        confidence="low", why_fit=[], why_not=["No usable signals / analyst produced nothing."],
+        recommended_persona="Supply Chain / Finance leadership", recommended_angle="",
+        reasoning="Insufficient evidence.", needs_human_research=True,
+        outreach=OutreachDraft(persona="Supply Chain leadership", subject="", first_line="", body=""),
+    )
+
+
+async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPScore:
     """Run the analyst agent to assess ICP fit and draft outreach.
 
     The agent can optionally run verification searches (up to MAX_ANALYST_SEARCHES)
@@ -97,22 +108,18 @@ def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPScore:
         captured.update(kw)
         return "recorded"
 
+    # exa_search is async — run_agent awaits awaitable impls automatically.
+    # record_assessment is sync — run_agent calls it directly.
     impls = {"exa_search": exa_search, "record_assessment": record_assessment}
-    run_agent(system, user, [EXA_SEARCH_TOOL, RECORD_TOOL], impls,
-              max_turns=MAX_ANALYST_SEARCHES + 3, final_tools={"record_assessment"}, log=log)
+    await run_agent(system, user, [EXA_SEARCH_TOOL, RECORD_TOOL], impls,
+                    max_turns=MAX_ANALYST_SEARCHES + 3, final_tools={"record_assessment"}, log=log)
 
     if not captured:  # agent never produced an assessment — conservative default
         _log.warning(
             "analyst: no record_assessment call from agent for company=%r — using conservative default",
             company.name,
         )
-        return ICPScore(
-            company_name=company.name, domain=company.domain, score=3, tier="Tier 3",
-            confidence="low", why_fit=[], why_not=["No usable signals / analyst produced nothing."],
-            recommended_persona="Supply Chain / Finance leadership", recommended_angle="",
-            reasoning="Insufficient evidence.", needs_human_research=True,
-            outreach=OutreachDraft(persona="Supply Chain leadership", subject="", first_line="", body=""),
-        )
+        return _conservative_default(company)
 
     # --- Defensive coercions before model construction ---
 
@@ -158,7 +165,14 @@ def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPScore:
             company.name, exc,
         )
         outreach = OutreachDraft(persona="", subject="", first_line="", body="")
-    score = ICPScore(company_name=company.name, domain=company.domain, outreach=outreach, **captured)
+    try:
+        score = ICPScore(company_name=company.name, domain=company.domain, outreach=outreach, **captured)
+    except Exception as exc:
+        _log.warning(
+            "analyst: ICPScore construction failed for company=%r (%s) — using conservative default",
+            company.name, exc,
+        )
+        return _conservative_default(company)
     result = apply_guards(score, signals)
     _log.info(
         "analyst done: company=%r score=%d tier=%s confidence=%s needs_human_research=%s",
@@ -175,6 +189,8 @@ def apply_guards(score: ICPScore, signals: list[Signal]) -> ICPScore:
     2. confidence==low AND score>=7 → score capped to 6.
     3. Tier derived from score + needs_human_research (overrides agent's tier).
     4. needs_human_research + Tier 1 → downgrade to Tier 2.
+
+    This function is synchronous — it is a pure transformation with no I/O.
 
     Args:
         score:   ICPScore to guard (mutated in place).

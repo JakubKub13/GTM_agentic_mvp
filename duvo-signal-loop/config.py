@@ -23,6 +23,11 @@ MAX_ANALYST_SEARCHES = 2           # hard cap on analyst verification searches
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
+MAX_CONCURRENT_ACCOUNTS = int(os.environ.get("MAX_CONCURRENT_ACCOUNTS", "5"))   # account-level fan-out cap
+HTTP_TIMEOUT_SECONDS = float(os.environ.get("HTTP_TIMEOUT_SECONDS", "30"))       # per write-back HTTP request
+ANTHROPIC_TIMEOUT_SECONDS = float(os.environ.get("ANTHROPIC_TIMEOUT_SECONDS", "120"))  # per model call
+ACCOUNT_TIMEOUT_SECONDS = float(os.environ.get("ACCOUNT_TIMEOUT_SECONDS", "300"))  # wall-clock cap per account (5 min)
+
 
 def require(name: str, value: str) -> str:
     """Return *value* if non-empty; raise RuntimeError mentioning *name* otherwise.
