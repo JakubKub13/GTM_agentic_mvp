@@ -103,20 +103,6 @@ uv lock
 uv sync
 ```
 
-### 📦 Migration from pip
-
-If you previously used `pip install -r requirements.txt`, here's what changed:
-
-| Old way | New way |
-|---|---|
-| `pip install -r requirements.txt` | `uv sync` |
-| `pip install -r requirements-dev.txt` | `uv sync` (dev deps included) |
-| Manual venv: `python3.11 -m venv .venv` | `uv sync` (automatic) |
-| `pip install package-name` | `uv add package-name` |
-| `pip install --upgrade` | `uv lock --upgrade` |
-
-**TL;DR:** `uv sync` replaces all pip workflows. The old `requirements.txt` files are no longer used; the lockfile is `uv.lock`.
-
 ### ⚙️ Optional env knobs
 
 All have sane defaults:
