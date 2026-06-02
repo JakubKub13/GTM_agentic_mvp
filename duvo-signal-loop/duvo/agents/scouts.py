@@ -3,6 +3,7 @@ import asyncio
 from typing import Literal
 
 from duvo.agent_core import run_agent
+from duvo.agents.agent_prompts import load_prompt
 from duvo.config import MAX_SCOUT_SEARCHES
 from duvo.infra.logging_setup import get_logger
 from duvo.models import Company, Signal
@@ -67,15 +68,7 @@ async def run_scout(
     """
     _log.info("scout starting: company=%r beat=%s", company.name, beat_key)
 
-    system = (
-        "You are a B2B GTM signal scout for Duvo (AI agents that automate retail/CPG back-office "
-        f"operations like reconciliation and PO matching). Your beat: {beat_desc}.\n"
-        "Find real, recent, SOURCED intent signals about the target company in your beat. "
-        f"Search iteratively with exa_search: start broad, then refine to follow the best thread. "
-        f"Do at most {MAX_SCOUT_SEARCHES} searches. Discard anything not clearly about the target "
-        "company or not in your beat. NEVER invent facts — report only what a result supports; an "
-        "empty result set is fine. When done, call submit_signals."
-    )
+    system = load_prompt("scout", beat_desc=beat_desc, max_scout_searches=MAX_SCOUT_SEARCHES)
     user = (f"Target company: {company.name} ({company.domain}, {company.country}). "
             f"Context: {company.description}")
     captured: dict = {"signals": []}

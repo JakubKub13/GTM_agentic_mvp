@@ -4,6 +4,7 @@ import re
 
 from duvo import config
 from duvo.agent_core import run_agent
+from duvo.agents.agent_prompts import load_prompt
 from duvo.infra.logging_setup import get_logger
 from duvo.models import RunResult
 from duvo.writeback import crm
@@ -45,17 +46,7 @@ def lead_email_for(base_email: str, domain: str) -> str:
     base_local = local.split("+", 1)[0]  # drop any existing +tag so we don't stack
     return f"{base_local}+{tag}@{host}"
 
-ROUTER_SYSTEM = (
-    "You are Duvo's GTM routing agent. You decide how to action one scored account into the "
-    "sales stack. Rules:\n"
-    "- ALWAYS call crm_upsert to log the account in the CRM with its evidence note.\n"
-    "- If the account is a CONFIDENT Tier 1 (tier == 'Tier 1' and needs_human_research is false), "
-    "also call slack_alert and outreach_queue (queues the lead for a rep to review and send — "
-    "never sent automatically).\n"
-    "- If it is flagged needs_human_research, or not Tier 1, ONLY call crm_upsert.\n"
-    "Call finish when done. Some tools may refuse if their own safety check fails — that is "
-    "expected; do not retry a refused tool."
-)
+ROUTER_SYSTEM = load_prompt("router")
 
 
 def _tool_schema(name: str, desc: str) -> dict:

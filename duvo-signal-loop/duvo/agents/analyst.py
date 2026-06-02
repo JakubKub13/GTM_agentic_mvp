@@ -2,6 +2,7 @@
 import json
 
 from duvo.agent_core import run_agent
+from duvo.agents.agent_prompts import load_prompt
 from duvo.config import MAX_ANALYST_SEARCHES
 from duvo.infra.logging_setup import get_logger
 from duvo.models import Company, ICPScore, OutreachDraft, Signal
@@ -14,17 +15,6 @@ _log = get_logger(__name__)
 # outreach object mid-JSON, yielding an empty/malformed draft that falls back to blank.
 # Give the analyst headroom so the draft completes.
 ANALYST_MAX_TOKENS = 4096
-
-ICP_DEFINITION = """Duvo AI closes operational back-office work end-to-end for enterprise retail
-and CPG. Ideal customer:
-- Industry: retail, grocery, CPG, e-commerce, pharmacy retail.
-- Size: 100M EUR+ revenue OR 500+ employees.
-- Tech: runs SAP / Oracle / similar ERP; manual reconciliation, PO/invoice matching in Excel,
-  supplier-portal chaos.
-- Geography: CEE preferred, Western Europe fine.
-- Trigger events: ERP migration, M&A, new CFO / Supply Chain Director, rapid expansion.
-Scoring 1-10: 9-10 perfect (retail/CPG, ERP, clear pain, trigger present); 7-8 strong;
-5-6 moderate (adjacent or missing a trigger); 3-4 weak (wrong industry/too small); 1-2 not a fit."""
 
 RECORD_TOOL = {
     "name": "record_assessment",
@@ -95,16 +85,7 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
     _log.info("analyst starting: company=%r signals=%d", company.name, len(signals))
 
     signals_json = json.dumps([s.model_dump() for s in signals], ensure_ascii=False, indent=2)
-    system = (
-        f"{ICP_DEFINITION}\n\n"
-        "You are Duvo's ICP analyst. Assess the company's fit and draft a first-touch outreach.\n"
-        "Ground every claim ONLY in the signals provided. If a signal looks important but doubtful, "
-        f"you MAY verify it with exa_search (at most {MAX_ANALYST_SEARCHES} times) before trusting "
-        "it. If signals are thin, generic, or undated, set confidence=low and "
-        "needs_human_research=true and keep the score conservative. The outreach first_line MUST "
-        "reference a real signal (or stay generic if none). Never fabricate a specific event. "
-        "When done, call record_assessment."
-    )
+    system = load_prompt("analyst", max_analyst_searches=MAX_ANALYST_SEARCHES)
     user = (f"Company: {company.name} ({company.domain}, {company.country}). "
             f"Context: {company.description}\n\nSignals:\n{signals_json}")
 
