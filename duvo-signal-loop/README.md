@@ -141,6 +141,7 @@ Run with `uv run` (dependencies are automatically in scope) or after activating 
 | `uv run python main.py --limit 3` | First 3 accounts only (fast live demo) |
 | `uv run python main.py` | Full concurrent loop with write-backs → `output/run-report.html` |
 | `uv run python main.py --concurrency 3` | Override `MAX_CONCURRENT_ACCOUNTS` for this run |
+| `uv run python main.py --test-email you@example.com` | Use your own inbox for the queued outreach lead (overrides `TEST_EMAIL`) |
 | `uv run python main.py --log-level DEBUG` | Verbose logs (every turn, tool call, and guard decision) |
 
 > ⚠️ **Note:** even `--dry-run` makes **real** Exa + Anthropic calls (only the write-backs are simulated), so it needs valid `EXA_API_KEY` and `ANTHROPIC_API_KEY`.
@@ -239,7 +240,10 @@ duvo-signal-loop/
 │   ├── agents/
 │   │   ├── scouts.py           # 4 concurrent scout agents (asyncio.gather fan-out)
 │   │   ├── analyst.py          # async analyst agent + apply_guards()
-│   │   └── router.py           # async router agent; write-backs as self-guarding async tools
+│   │   ├── router.py           # async router agent; write-backs as self-guarding async tools
+│   │   └── agent_prompts/      # externalized system prompts as Markdown + load_prompt() loader
+│   │       ├── scout.md / analyst.md / router.md
+│   │       └── __init__.py     # load_prompt(name, **params) — reads <name>.md, fills {placeholders}
 │   ├── writeback/
 │   │   ├── crm.py              # async CRM dispatcher (attio | hubspot)
 │   │   ├── attio.py / hubspot.py
@@ -256,7 +260,7 @@ duvo-signal-loop/
 └── output/                     # generated reports (gitignored)
 ```
 
-> Each folder groups one functional concern: the package root holds the shared kernel (`config`, `models`, `agent_core`) and the `orchestrator`; `infra/` cross-cutting infrastructure; `tools/` agent tools; `agents/` the six agents; `writeback/` the pluggable sales-stack adapters; `reporting/` the HTML audit report.
+> Each folder groups one functional concern: the package root holds the shared kernel (`config`, `models`, `agent_core`) and the `orchestrator`; `infra/` cross-cutting infrastructure; `tools/` agent tools; `agents/` the six agents (with their system prompts externalized as editable Markdown under `agents/agent_prompts/`); `writeback/` the pluggable sales-stack adapters; `reporting/` the HTML audit report.
 
 <div align="center">
 <sub>Built with Claude · async-first · human-in-the-loop by design</sub>
