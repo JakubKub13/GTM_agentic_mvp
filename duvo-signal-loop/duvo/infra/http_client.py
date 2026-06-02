@@ -7,8 +7,8 @@ shutdown to drain in-flight connections cleanly.
 """
 import httpx
 
-import config
-from logging_setup import get_logger
+from duvo import config
+from duvo.infra.logging_setup import get_logger
 
 log = get_logger(__name__)
 

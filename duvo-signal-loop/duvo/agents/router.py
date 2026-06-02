@@ -2,11 +2,11 @@
 import json
 import re
 
-import config
-from models import RunResult
-from agent_core import run_agent
-from logging_setup import get_logger
-from writeback import crm
+from duvo import config
+from duvo.agent_core import run_agent
+from duvo.infra.logging_setup import get_logger
+from duvo.models import RunResult
+from duvo.writeback import crm
 
 _log = get_logger(__name__)
 
@@ -133,8 +133,15 @@ async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST
             status = "[dry-run] alert #sales"
             rr.slack_status = status
         else:
-            from writeback import slack  # lazy — module added in a later group
-            status = await slack.alert_tier1(s)
+            from duvo.writeback import slack  # lazy — module added in a later group
+            try:
+                status = await slack.alert_tier1(s)
+            except Exception as exc:
+                # Record the failure honestly instead of leaving status as "skipped"
+                # (which reads as "not attempted"). The run still continues — and a
+                # failed alert must not abort the more important outreach step.
+                status = f"failed: {exc}"
+                _log.warning("slack_alert failed for %s: %s", s.company_name, exc)
             rr.slack_status = status
         _log.info("slack_alert result: %s", status)
         return status
@@ -150,7 +157,7 @@ async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST
             status = f"[dry-run] queue lead for review in {config.OUTREACH_PROVIDER}"
             rr.outreach_status = status
         else:
-            from writeback import outreach  # lazy — module added in a later group
+            from duvo.writeback import outreach  # lazy — module added in a later group
             # Per-account plus-addressing so each lead is a distinct contact in the
             # outreach tool (all still delivering to the one real inbox).
             lead_email = lead_email_for(test_email, s.domain)

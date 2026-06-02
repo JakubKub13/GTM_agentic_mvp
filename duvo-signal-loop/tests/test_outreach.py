@@ -3,11 +3,9 @@ import logging
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-import config
+from duvo import config
+from duvo.writeback import outreach
 from tests.conftest import make_score
-from writeback import outreach
 
 
 @contextmanager
@@ -42,7 +40,7 @@ class TestQueueLeadBrevo:
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "brevo")
         stub_result = "contact queued in Brevo review list 42 (not sent — rep reviews & sends)"
 
-        with patch("writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)) as mock_brevo:
+        with patch("duvo.writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)) as mock_brevo:
             result = await outreach.queue_lead(make_score(), "test@example.com")
 
         mock_brevo.assert_called_once()
@@ -52,7 +50,7 @@ class TestQueueLeadBrevo:
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "brevo")
         score = make_score(company_name="TestCo")
 
-        with patch("writeback.brevo.queue_lead", AsyncMock(return_value="ok")) as mock_brevo:
+        with patch("duvo.writeback.brevo.queue_lead", AsyncMock(return_value="ok")) as mock_brevo:
             await outreach.queue_lead(score, "rep@test.com")
 
         args = mock_brevo.call_args[0]
@@ -69,7 +67,7 @@ class TestQueueLeadLemlist:
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "lemlist")
         stub_result = "lead queued in paused lemlist campaign cam_abc (awaiting rep approval)"
 
-        with patch("writeback.lemlist.queue_lead", AsyncMock(return_value=stub_result)) as mock_lemlist:
+        with patch("duvo.writeback.lemlist.queue_lead", AsyncMock(return_value=stub_result)) as mock_lemlist:
             result = await outreach.queue_lead(make_score(), "test@example.com")
 
         mock_lemlist.assert_called_once()
@@ -79,7 +77,7 @@ class TestQueueLeadLemlist:
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "lemlist")
         score = make_score(company_name="LemCo")
 
-        with patch("writeback.lemlist.queue_lead", AsyncMock(return_value="ok")) as mock_lemlist:
+        with patch("duvo.writeback.lemlist.queue_lead", AsyncMock(return_value="ok")) as mock_lemlist:
             await outreach.queue_lead(score, "lem@test.com")
 
         args = mock_lemlist.call_args[0]
@@ -97,7 +95,7 @@ class TestQueueLeadUnknownProvider:
         stub_result = "contact queued in Brevo review list 42 (not sent — rep reviews & sends)"
 
         with _capture_duvo_logs(logging.WARNING) as records:
-            with patch("writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)) as mock_brevo:
+            with patch("duvo.writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)) as mock_brevo:
                 result = await outreach.queue_lead(make_score(), "test@example.com")
 
         mock_brevo.assert_called_once()
@@ -112,7 +110,7 @@ class TestQueueLeadUnknownProvider:
         stub_result = "contact queued in Brevo review list 42 (not sent — rep reviews & sends)"
 
         with _capture_duvo_logs(logging.WARNING) as records:
-            with patch("writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)):
+            with patch("duvo.writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)):
                 await outreach.queue_lead(make_score(), "test@example.com")
 
         unknown_warns = [

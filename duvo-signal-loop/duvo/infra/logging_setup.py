@@ -2,7 +2,7 @@
 
 Every module in this project should obtain its logger via::
 
-    from logging_setup import get_logger
+    from duvo.infra.logging_setup import get_logger
     log = get_logger(__name__)
 
 This keeps all project logs under a single ``duvo`` parent logger so that the
@@ -11,7 +11,7 @@ log level and handlers can be configured once (e.g. from ``LOG_LEVEL`` in
 """
 import logging
 
-import config
+from duvo import config
 
 # Name of the shared parent logger for the entire project.
 _ROOT_LOGGER_NAME = "duvo"
@@ -95,8 +95,10 @@ def get_logger(name: str) -> logging.Logger:
     has never explicitly configured it.
 
     Args:
-        name: Typically ``__name__`` of the calling module.  The resulting
-            logger will be named ``duvo.<name>``.
+        name: Typically ``__name__`` of the calling module.  Modules inside the
+            ``duvo`` package already carry the ``duvo.`` prefix (e.g.
+            ``duvo.agents.scouts``) and are used as-is; any other name is nested
+            under ``duvo.`` so it still inherits the shared handlers.
 
     Returns:
         A :class:`logging.Logger` instance whose effective level and handlers
@@ -105,4 +107,6 @@ def get_logger(name: str) -> logging.Logger:
     duvo_logger = logging.getLogger(_ROOT_LOGGER_NAME)
     if not duvo_logger.handlers:
         configure_logging()
+    if name == _ROOT_LOGGER_NAME or name.startswith(f"{_ROOT_LOGGER_NAME}."):
+        return logging.getLogger(name)
     return logging.getLogger(f"{_ROOT_LOGGER_NAME}.{name}")

@@ -8,7 +8,7 @@
 [![Async](https://img.shields.io/badge/async-asyncio-1F6FEB)](https://docs.python.org/3/library/asyncio.html)
 [![httpx](https://img.shields.io/badge/HTTP-httpx-0A7E8C)](https://www.python-httpx.org/)
 [![Claude](https://img.shields.io/badge/LLM-Claude-D97757?logo=anthropic&logoColor=white)](https://www.anthropic.com/)
-[![Tests](https://img.shields.io/badge/tests-281%20passing-3FB950)](#-tests)
+[![Tests](https://img.shields.io/badge/tests-295%20passing-3FB950)](#-tests)
 [![Style](https://img.shields.io/badge/built-test--first-8957E5)](#-tests)
 
 </div>
@@ -21,7 +21,7 @@
 - ⚡ **Async-first & production-ready** — `asyncio` end-to-end, pooled `httpx` client, bounded concurrency, timeouts at every layer.
 - 🔌 **Pluggable stack** — swap CRM (Attio ⇄ HubSpot) and outreach (Brevo ⇄ lemlist) with a single env var.
 - 🛡️ **Bounded agency** — deterministic guards, score clamping, and a router that **never sends** without a human in the loop.
-- 🧪 **Fully tested offline** — 281 mocked tests, no API keys or network required.
+- 🧪 **Fully tested offline** — 295 mocked tests, no API keys or network required.
 - 📊 **Self-documenting runs** — every run renders an HTML audit report of decisions and agent tool calls.
 
 ---
@@ -30,7 +30,7 @@
 
 ```mermaid
 flowchart LR
-    CSV([📄 companies.csv]) --> ORCH[🎯 main.py<br/>orchestrator]
+    CSV([📄 companies.csv]) --> ORCH[🎯 main.py →<br/>duvo.orchestrator]
     ORCH -- Semaphore-bounded<br/>asyncio.gather --> PIPE
 
     subgraph PIPE [per-account pipeline]
@@ -45,7 +45,7 @@ flowchart LR
     PIPE --> REP[📊 HTML report]
 ```
 
-Every agent runs on one shared async tool-use loop (`agent_core.run_agent`) backed by an **`AsyncAnthropic`** client. Write-backs (`crm`, `slack`, `outreach`) share a single **`httpx.AsyncClient`** via `http_client.get_client()` — one connection pool for the whole process. `main.py` only orchestrates the hand-offs.
+Every agent runs on one shared async tool-use loop (`duvo.agent_core.run_agent`) backed by an **`AsyncAnthropic`** client. Write-backs (`crm`, `slack`, `outreach`) share a single **`httpx.AsyncClient`** via `duvo.infra.http_client.get_client()` — one connection pool for the whole process. `duvo.orchestrator` only orchestrates the hand-offs (reached through the thin `main.py` entry shim).
 
 ---
 
@@ -151,7 +151,7 @@ Run with `uv run` (dependencies are automatically in scope) or after activating 
 
 The entire pipeline is async end-to-end:
 
-- 🎯 **Orchestrator** (`main.py`) — `async def run(...)` fans out all accounts concurrently via `asyncio.gather`, bounded by `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)`. Each account runs in its own `_process_account` coroutine, so a single failure logs an error and yields `None` without aborting the batch. The shared `httpx.AsyncClient` is always closed via `await http_client.aclose()` in a `finally` block — even if every account fails.
+- 🎯 **Orchestrator** (`duvo.orchestrator`, reached via the `main.py` entry shim) — `async def run(...)` fans out all accounts concurrently via `asyncio.gather`, bounded by `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)`. Each account runs in its own `_process_account` coroutine, so a single failure logs an error and yields `None` without aborting the batch. The shared `httpx.AsyncClient` is always closed via `await http_client.aclose()` in a `finally` block — even if every account fails.
 - 🔎 **Scouts** — four beats fan out via `asyncio.gather` inside `scout_all`; `exa_search` uses `asyncio.to_thread` to keep the loop unblocked.
 - 🧠🚦 **Analyst / Router** — `async def run_analyst` / `async def run_router` each drive the shared `async run_agent` loop; write-backs are awaited async `httpx` calls.
 - 📊 **Reporter** — `generate_report(results)` stays **sync** (pure CPU + file I/O, no network); calling it from an async context is safe and correct.
@@ -161,7 +161,7 @@ The entire pipeline is async end-to-end:
 
 ## 🧾 Logging
 
-Every module logs through a single `duvo.*` logger tree configured by `logging_setup.configure_logging()` (called at startup; level set by `--log-level` / `LOG_LEVEL`). You get a timestamped, levelled trace of each agent turn, every tool call, every guard decision, and every write-back result — enough to debug a run from the console alone. **Secrets** (API keys, the Slack webhook URL) are never logged.
+Every module logs through a single `duvo.*` logger tree configured by `duvo.infra.logging_setup.configure_logging()` (called at startup; level set by `--log-level` / `LOG_LEVEL`). You get a timestamped, levelled trace of each agent turn, every tool call, every guard decision, and every write-back result — enough to debug a run from the console alone. **Secrets** (API keys, the Slack webhook URL) are never logged.
 
 ---
 
@@ -171,7 +171,7 @@ Built test-first and runs **fully offline** — every external dependency (Anthr
 
 ```bash
 # Run tests with uv
-uv run pytest -q          # 281 tests, ~1s
+uv run pytest -q          # 295 tests, ~1s
 
 # Or activate the venv first, then run pytest directly
 source .venv/bin/activate && pytest -q
@@ -226,28 +226,37 @@ Scouts as MCP-tool agents (Apollo / LinkedIn / Gong) · a discovery agent for ne
 
 ```text
 duvo-signal-loop/
-├── config.py              # env + model + constants (concurrency + HTTP/Anthropic/account timeouts)
-├── models.py              # Pydantic contract shared across agents
-├── logging_setup.py       # central duvo.* logger
-├── agent_core.py          # async run_agent() tool-use loop (AsyncAnthropic client)
-├── http_client.py         # shared pooled httpx.AsyncClient — get_client() + async aclose()
-├── tools/
-│   └── exa_tool.py        # exa_search tool (asyncio.to_thread for sync exa-py)
-├── scouts.py              # 4 concurrent scout agents (asyncio.gather fan-out)
-├── analyst.py             # async analyst agent + apply_guards()
-├── router.py              # async router agent; write-backs as self-guarding async tools
-├── writeback/
-│   ├── crm.py             # async CRM dispatcher (attio | hubspot)
-│   ├── attio.py / hubspot.py
-│   ├── slack.py           # async Tier-1 #sales alert
-│   ├── outreach.py        # async outreach dispatcher (brevo | lemlist)
-│   └── brevo.py / lemlist.py
-├── reporter.py            # sync HTML audit report (pure CPU/file — no async needed)
-├── templates/report.html
-├── main.py                # async orchestrator: semaphore-bounded gather → report
-├── tests/                 # pytest suite (fully mocked, no keys/network, asyncio_mode=auto)
-└── output/                # generated reports (gitignored)
+├── duvo/                       # application package (mirrors the duvo.* logger tree)
+│   ├── config.py               # env + model + constants (concurrency + HTTP/Anthropic/account timeouts)
+│   ├── models.py               # Pydantic contract shared across agents
+│   ├── agent_core.py           # async run_agent() tool-use loop (AsyncAnthropic client)
+│   ├── orchestrator.py         # async orchestrator: semaphore-bounded gather → report
+│   ├── infra/                  # cross-cutting infrastructure
+│   │   ├── logging_setup.py    # central duvo.* logger
+│   │   └── http_client.py      # shared pooled httpx.AsyncClient — get_client() + async aclose()
+│   ├── tools/
+│   │   └── exa_tool.py         # exa_search tool (asyncio.to_thread for sync exa-py)
+│   ├── agents/
+│   │   ├── scouts.py           # 4 concurrent scout agents (asyncio.gather fan-out)
+│   │   ├── analyst.py          # async analyst agent + apply_guards()
+│   │   └── router.py           # async router agent; write-backs as self-guarding async tools
+│   ├── writeback/
+│   │   ├── crm.py              # async CRM dispatcher (attio | hubspot)
+│   │   ├── attio.py / hubspot.py
+│   │   ├── slack.py            # async Tier-1 #sales alert
+│   │   ├── outreach.py         # async outreach dispatcher (brevo | lemlist)
+│   │   └── brevo.py / lemlist.py
+│   └── reporting/
+│       ├── reporter.py         # sync HTML audit report (pure CPU/file — no async needed)
+│       └── templates/report.html
+├── main.py                     # thin entry shim → duvo.orchestrator:main (keeps `python main.py` working)
+├── companies.csv               # input target list
+├── pyproject.toml              # deps + pytest + ruff config (uv-managed; lockfile in uv.lock)
+├── tests/                      # pytest suite (fully mocked, no keys/network, asyncio_mode=auto)
+└── output/                     # generated reports (gitignored)
 ```
+
+> Each folder groups one functional concern: the package root holds the shared kernel (`config`, `models`, `agent_core`) and the `orchestrator`; `infra/` cross-cutting infrastructure; `tools/` agent tools; `agents/` the six agents; `writeback/` the pluggable sales-stack adapters; `reporting/` the HTML audit report.
 
 <div align="center">
 <sub>Built with Claude · async-first · human-in-the-loop by design</sub>

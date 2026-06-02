@@ -1,10 +1,9 @@
 """lemlist adapter: queue a Tier-1 lead into a PAUSED campaign as a draft. Same interface as brevo."""
-import http_client
-
-import config
-from config import require
-from logging_setup import get_logger
-from models import ICPScore
+from duvo import config
+from duvo.config import require
+from duvo.infra import http_client
+from duvo.infra.logging_setup import get_logger
+from duvo.models import ICPScore
 
 log = get_logger(__name__)
 

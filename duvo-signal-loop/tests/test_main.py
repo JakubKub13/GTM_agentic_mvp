@@ -3,11 +3,8 @@ import asyncio
 import csv
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
+from duvo.models import Company, RunResult, Signal
 from tests.conftest import make_score
-from models import Company, RunResult, Signal
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -51,7 +48,7 @@ def _write_csv(path, rows: list[dict]) -> None:
 
 class TestLoadCompanies:
     def test_parses_csv_correctly(self, tmp_path):
-        from main import load_companies
+        from duvo.orchestrator import load_companies
 
         csv_path = str(tmp_path / "test_companies.csv")
         _write_csv(csv_path, [
@@ -70,13 +67,13 @@ class TestLoadCompanies:
         assert companies[1].name == "Beta Ltd"
 
     def test_real_companies_csv_loads_10(self):
-        from main import load_companies
+        from duvo.orchestrator import load_companies
 
         companies = load_companies("companies.csv")
         assert len(companies) == 10
 
     def test_returns_list_of_company_objects(self, tmp_path):
-        from main import load_companies
+        from duvo.orchestrator import load_companies
 
         csv_path = str(tmp_path / "c.csv")
         _write_csv(csv_path, [
@@ -90,7 +87,7 @@ class TestLoadCompanies:
 # run tests — all async, all external calls patched
 # ---------------------------------------------------------------------------
 
-PATCH_BASE = "main"
+PATCH_BASE = "duvo.orchestrator"
 
 
 def _two_companies() -> list[Company]:
@@ -126,7 +123,7 @@ class TestRun:
     """Test the async orchestrator run() with all external calls patched."""
 
     async def test_processes_all_companies(self):
-        from main import run
+        from duvo.orchestrator import run
 
         mocks = _base_patches()
         with (
@@ -135,7 +132,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None)
 
@@ -144,7 +141,7 @@ class TestRun:
         assert mocks["router"].call_count == 2
 
     async def test_limit_is_respected(self):
-        from main import run
+        from duvo.orchestrator import run
 
         companies = [
             Company(name=f"Co{i}", domain=f"co{i}.com", country="US", description="")
@@ -157,7 +154,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=3)
 
@@ -166,7 +163,7 @@ class TestRun:
         assert mocks["router"].call_count == 3
 
     async def test_run_router_receives_dry_run_flag(self):
-        from main import run
+        from duvo.orchestrator import run
 
         mocks = _base_patches()
         with (
@@ -175,7 +172,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
         ):
             await run(dry_run=True, test_email="rep@test.com", limit=None)
 
@@ -185,7 +182,7 @@ class TestRun:
             assert args[1] is True  # dry_run positional
 
     async def test_generate_report_called_once_with_results_list(self):
-        from main import run
+        from duvo.orchestrator import run
 
         mocks = _base_patches()
         with (
@@ -194,7 +191,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None)
 
@@ -206,7 +203,7 @@ class TestRun:
 
     async def test_run_results_have_agent_log_populated(self):
         """Each RunResult passed to generate_report must carry the log list from the pipeline."""
-        from main import run
+        from duvo.orchestrator import run
 
         mocks = _base_patches()
 
@@ -222,7 +219,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None)
 
@@ -231,7 +228,7 @@ class TestRun:
             assert "router:crm_write()" in rr.agent_log
 
     async def test_configure_logging_is_invoked(self):
-        from main import run
+        from duvo.orchestrator import run
 
         mocks = _base_patches()
         mock_configure = MagicMock()
@@ -242,14 +239,14 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
             patch(f"{PATCH_BASE}.configure_logging", mock_configure),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None)
 
         mock_configure.assert_called_once()
 
     async def test_run_router_receives_test_email(self):
-        from main import run
+        from duvo.orchestrator import run
 
         mocks = _base_patches()
         with (
@@ -258,7 +255,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
         ):
             await run(dry_run=False, test_email="custom@example.com", limit=None)
 
@@ -270,7 +267,7 @@ class TestRun:
         """If one account raises inside run_analyst, run() must not raise, must still call
         generate_report once, and the results passed to it must contain only the successful
         accounts (the failing one is skipped)."""
-        from main import run
+        from duvo.orchestrator import run
 
         companies = [
             Company(name="Good Corp", domain="good.com", country="US", description="Fine"),
@@ -297,7 +294,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mock_analyst),
             patch(f"{PATCH_BASE}.run_router", mock_router),
             patch(f"{PATCH_BASE}.generate_report", mock_report),
-            patch("http_client.aclose", mock_aclose),
+            patch("duvo.infra.http_client.aclose", mock_aclose),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None)
 
@@ -314,8 +311,8 @@ class TestRun:
         assert "Bad Corp" not in successful_names
 
     async def test_http_client_aclose_awaited_on_success(self):
-        """http_client.aclose() must be awaited after a successful run."""
-        from main import run
+        """duvo.infra.http_client.aclose() must be awaited after a successful run."""
+        from duvo.orchestrator import run
 
         mocks = _base_patches()
         with (
@@ -324,15 +321,15 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None)
 
         mocks["aclose"].assert_awaited_once()
 
     async def test_http_client_aclose_awaited_when_account_fails(self):
-        """http_client.aclose() must be awaited in finally even when an account raises."""
-        from main import run
+        """duvo.infra.http_client.aclose() must be awaited in finally even when an account raises."""
+        from duvo.orchestrator import run
 
         mock_aclose = AsyncMock(return_value=None)
         mock_load = MagicMock(return_value=_two_companies())
@@ -347,7 +344,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", AsyncMock()),
             patch(f"{PATCH_BASE}.run_router", AsyncMock()),
             patch(f"{PATCH_BASE}.generate_report", mock_report),
-            patch("http_client.aclose", mock_aclose),
+            patch("duvo.infra.http_client.aclose", mock_aclose),
         ):
             # run() does not raise — errors are per-account isolated
             await run(dry_run=False, test_email="test@test.com", limit=None)
@@ -360,7 +357,7 @@ class TestRun:
 
     async def test_concurrency_parameter_accepted_and_used(self):
         """run() accepts a concurrency kwarg and passes it to asyncio.Semaphore."""
-        from main import run
+        from duvo.orchestrator import run
 
         captured_values: list[int] = []
         real_Semaphore = asyncio.Semaphore
@@ -376,7 +373,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
             patch(f"{PATCH_BASE}.asyncio.Semaphore", fake_Semaphore),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None, concurrency=7)
@@ -385,8 +382,8 @@ class TestRun:
 
     async def test_concurrency_defaults_to_max_concurrent_accounts(self):
         """When concurrency=None, the semaphore uses MAX_CONCURRENT_ACCOUNTS from config."""
-        from main import run
-        import config as cfg
+        from duvo import config as cfg
+        from duvo.orchestrator import run
 
         captured_values: list[int] = []
         real_Semaphore = asyncio.Semaphore
@@ -402,7 +399,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
-            patch("http_client.aclose", mocks["aclose"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
             patch(f"{PATCH_BASE}.asyncio.Semaphore", fake_Semaphore),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None, concurrency=None)
@@ -415,7 +412,7 @@ class TestRun:
         """When an account's pipeline hangs beyond ACCOUNT_TIMEOUT_SECONDS, that account
         is excluded from the results but run() does not raise and generate_report is still
         called with the successful results."""
-        from main import run
+        from duvo.orchestrator import run
 
         companies = [
             Company(name="Fast Corp", domain="fast.com", country="US", description="Fine"),
@@ -441,7 +438,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_analyst", mock_analyst),
             patch(f"{PATCH_BASE}.run_router", mock_router),
             patch(f"{PATCH_BASE}.generate_report", mock_report),
-            patch("http_client.aclose", mock_aclose),
+            patch("duvo.infra.http_client.aclose", mock_aclose),
             # Patch main.ACCOUNT_TIMEOUT_SECONDS — the module-level name _process_account reads
             patch(f"{PATCH_BASE}.ACCOUNT_TIMEOUT_SECONDS", 0.01),
         ):

@@ -3,10 +3,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import config
+from duvo import config
+from duvo.writeback import brevo
 from tests.conftest import _fake_response, make_fake_async_client, make_score
-from writeback import brevo
-
 
 # ---------------------------------------------------------------------------
 # _headers
@@ -37,7 +36,7 @@ class TestQueueLeadFullPayload:
         ok_resp = _fake_response(201)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await brevo.queue_lead(make_score(), "lead@example.com")
 
         call_url = client.post.call_args[0][0]
@@ -49,7 +48,7 @@ class TestQueueLeadFullPayload:
         ok_resp = _fake_response(201)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await brevo.queue_lead(make_score(), "lead@example.com")
 
         body = client.post.call_args[1]["json"]
@@ -64,7 +63,7 @@ class TestQueueLeadFullPayload:
         ok_resp = _fake_response(201)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await brevo.queue_lead(make_score(), "lead@example.com")
 
         body = client.post.call_args[1]["json"]
@@ -77,7 +76,7 @@ class TestQueueLeadFullPayload:
         ok_resp = _fake_response(201)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await brevo.queue_lead(make_score(), "lead@example.com")
 
         assert "42" in result
@@ -91,7 +90,7 @@ class TestQueueLeadFullPayload:
         ok_resp = _fake_response(201)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await brevo.queue_lead(make_score(), "lead@example.com")
 
         for c in client.post.call_args_list:
@@ -115,7 +114,7 @@ class TestQueueLeadFallbackToMinimal:
 
         client = make_fake_async_client(post=AsyncMock(side_effect=[fail_resp, ok_resp]))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await brevo.queue_lead(make_score(), "lead@example.com")
 
         assert client.post.call_count == 2
@@ -128,7 +127,7 @@ class TestQueueLeadFallbackToMinimal:
 
         client = make_fake_async_client(post=AsyncMock(side_effect=[fail_resp, ok_resp]))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await brevo.queue_lead(make_score(), "lead@example.com")
 
         minimal_body = client.post.call_args_list[1][1]["json"]
@@ -144,7 +143,7 @@ class TestQueueLeadFallbackToMinimal:
 
         client = make_fake_async_client(post=AsyncMock(side_effect=[fail_resp, ok_resp]))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await brevo.queue_lead(make_score(), "lead@example.com")
 
         assert "99" in result
@@ -163,7 +162,7 @@ class TestQueueLeadBothFail:
 
         client = make_fake_async_client(post=AsyncMock(return_value=err_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 500"):
                 await brevo.queue_lead(make_score(), "lead@example.com")
 
@@ -179,7 +178,7 @@ class TestListIdCastToInt:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await brevo.queue_lead(make_score(), "lead@example.com")
 
         body = client.post.call_args[1]["json"]

@@ -1,11 +1,11 @@
 """Analyst agent: validate signals (with its own verification searches), score, draft outreach."""
 import json
 
-from config import MAX_ANALYST_SEARCHES
-from models import Company, Signal, ICPScore, OutreachDraft
-from agent_core import run_agent
-from tools.exa_tool import EXA_SEARCH_TOOL, exa_search
-from logging_setup import get_logger
+from duvo.agent_core import run_agent
+from duvo.config import MAX_ANALYST_SEARCHES
+from duvo.infra.logging_setup import get_logger
+from duvo.models import Company, ICPScore, OutreachDraft, Signal
+from duvo.tools.exa_tool import EXA_SEARCH_TOOL, exa_search
 
 _log = get_logger(__name__)
 

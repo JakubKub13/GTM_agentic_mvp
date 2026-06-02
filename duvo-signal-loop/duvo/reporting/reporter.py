@@ -3,8 +3,8 @@ import os
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from logging_setup import get_logger
-from models import RunResult
+from duvo.infra.logging_setup import get_logger
+from duvo.models import RunResult
 
 log = get_logger(__name__)
 

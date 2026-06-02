@@ -1,7 +1,7 @@
 """Outreach dispatcher — one interface the router uses; provider chosen by OUTREACH_PROVIDER."""
-import config
-from logging_setup import get_logger
-from models import ICPScore
+from duvo import config
+from duvo.infra.logging_setup import get_logger
+from duvo.models import ICPScore
 
 log = get_logger(__name__)
 
@@ -23,11 +23,11 @@ async def queue_lead(score: ICPScore, test_email: str) -> str:
     log.info("outreach: dispatching to provider=%s for company=%s", provider, score.company_name)
 
     if provider == "lemlist":
-        from writeback import lemlist
+        from duvo.writeback import lemlist
         return await lemlist.queue_lead(score, test_email)
 
     if provider != "brevo":
         log.warning("unknown OUTREACH_PROVIDER=%r — defaulting to brevo", provider)
 
-    from writeback import brevo
+    from duvo.writeback import brevo
     return await brevo.queue_lead(score, test_email)

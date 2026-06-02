@@ -3,10 +3,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import config
+from duvo import config
+from duvo.writeback import attio
 from tests.conftest import _fake_response, make_fake_async_client, make_score
-from writeback import attio
-
 
 # ---------------------------------------------------------------------------
 # _note_body
@@ -83,7 +82,7 @@ class TestCreateCompany:
         ok_resp = _fake_response(200, {"data": {"id": {"record_id": record_id}}})
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await attio._create_company(make_score())
 
         assert result == record_id
@@ -99,7 +98,7 @@ class TestCreateCompany:
 
         client = make_fake_async_client(post=AsyncMock(side_effect=[fail_resp, ok_resp]))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await attio._create_company(make_score())
 
         assert result == record_id
@@ -118,7 +117,7 @@ class TestCreateCompany:
         fail_resp = _fake_response(500, raise_on_raise=True)
         client = make_fake_async_client(post=AsyncMock(return_value=fail_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 500"):
                 await attio._create_company(make_score())
 
@@ -133,7 +132,7 @@ class TestCreateNote:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await attio._create_note(make_score(), "rec_123")
 
         call_url = client.post.call_args[0][0]
@@ -144,7 +143,7 @@ class TestCreateNote:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await attio._create_note(make_score(), "rec_123")
 
         ok_resp.raise_for_status.assert_called_once()
@@ -154,7 +153,7 @@ class TestCreateNote:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await attio._create_note(make_score(), "rec_999")
 
         payload = client.post.call_args[1]["json"]
@@ -175,7 +174,7 @@ class TestUpsertAccount:
 
         client = make_fake_async_client(post=AsyncMock(side_effect=[company_resp, note_resp]))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await attio.upsert_account(make_score())
 
         assert "attio company" in result
@@ -190,7 +189,7 @@ class TestUpsertAccount:
 
         client = make_fake_async_client(post=AsyncMock(side_effect=[company_resp, note_resp]))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await attio.upsert_account(make_score())
 
         assert client.post.call_count == 2

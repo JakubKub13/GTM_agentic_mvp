@@ -1,10 +1,9 @@
 """Brevo outreach: create the contact in a Tier-1 review list. Never sends — a rep approves + sends."""
-import http_client
-
-import config
-from config import require
-from logging_setup import get_logger
-from models import ICPScore
+from duvo import config
+from duvo.config import require
+from duvo.infra import http_client
+from duvo.infra.logging_setup import get_logger
+from duvo.models import ICPScore
 
 log = get_logger(__name__)
 

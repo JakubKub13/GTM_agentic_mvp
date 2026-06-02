@@ -2,8 +2,8 @@
 import inspect
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
 
+import pytest
 
 # ---------------------------------------------------------------------------
 # Helpers to build fake Anthropic response objects
@@ -44,8 +44,8 @@ class TestRunAgentNoTools:
     async def test_returns_messages_on_first_text_response(self, fake_client):
         fake_client.messages.create.return_value = _make_response([_make_text_block("hello")])
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent(
                 system="sys",
                 user="hi",
@@ -62,8 +62,8 @@ class TestRunAgentNoTools:
     async def test_messages_list_starts_with_user_message(self, fake_client):
         fake_client.messages.create.return_value = _make_response([_make_text_block()])
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent("sys", "user prompt", [], {})
 
         assert messages[0]["role"] == "user"
@@ -90,8 +90,8 @@ class TestRunAgentToolExecution:
             impl_called_with["x"] = x
             return "tool result"
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent(
                 system="sys",
                 user="go",
@@ -118,8 +118,8 @@ class TestRunAgentToolExecution:
         ]
 
         agent_log = []
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             await run_agent("sys", "go", [], impls={"search": lambda query: "r"}, log=agent_log)
 
         assert len(agent_log) == 1
@@ -132,8 +132,8 @@ class TestRunAgentToolExecution:
             _make_response([_make_text_block()]),
         ]
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             # Should not raise
             await run_agent("sys", "go", [], impls={"t": lambda: "ok"})
 
@@ -151,8 +151,8 @@ class TestRunAgentToolExecution:
             called["val"] = val
             return "sync-result"
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent("sys", "go", [], impls={"sync_tool": sync_tool})
 
         assert called["val"] == "hello"
@@ -178,8 +178,8 @@ class TestRunAgentToolExecution:
             called["val"] = val
             return "async-result"
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent("sys", "go", [], impls={"async_tool": async_tool})
 
         assert called["val"] == "world"
@@ -202,8 +202,8 @@ class TestRunAgentToolExecution:
         def none_tool():
             return None
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent("sys", "go", [], impls={"none_tool": none_tool})
 
         tool_result_turns = [
@@ -229,8 +229,8 @@ class TestRunAgentToolExecution:
         def zero_tool():
             return 0
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent("sys", "go", [], impls={"zero_tool": zero_tool})
 
         tool_result_turns = [
@@ -254,8 +254,8 @@ class TestRunAgentFinalTools:
         final_block = _make_tool_use_block("finish", {"result": "done"}, "tu-f")
         fake_client.messages.create.return_value = _make_response([final_block])
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent(
                 system="sys",
                 user="go",
@@ -278,8 +278,8 @@ class TestRunAgentFinalTools:
             _make_response([_make_text_block()]),  # should not be reached
         ]
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             await run_agent(
                 system="sys",
                 user="go",
@@ -309,8 +309,8 @@ class TestRunAgentToolError:
         def bad_tool():
             raise ValueError("something went wrong")
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent("sys", "go", [], impls={"bad_tool": bad_tool})
 
         # Loop must continue (two create calls)
@@ -336,8 +336,8 @@ class TestRunAgentToolError:
             _make_response([_make_text_block("ok")]),
         ]
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             msgs = await run_agent("sys", "go", [], impls={"fail": lambda: (_ for _ in ()).throw(RuntimeError("boom"))})
 
         assert fake_client.messages.create.call_count == 2
@@ -355,8 +355,8 @@ class TestRunAgentMaxTurns:
         tool_block = _make_tool_use_block("loop_tool", {}, "tu-loop")
         fake_client.messages.create.return_value = _make_response([tool_block])
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             await run_agent("sys", "go", [], impls={"loop_tool": lambda: "x"}, max_turns=3)
 
         assert fake_client.messages.create.call_count == 3
@@ -365,8 +365,8 @@ class TestRunAgentMaxTurns:
         tool_block = _make_tool_use_block("loop_tool", {}, "tu-loop2")
         fake_client.messages.create.return_value = _make_response([tool_block])
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             await run_agent("sys", "go", [], impls={"loop_tool": lambda: "x"})
 
         assert fake_client.messages.create.call_count == 8
@@ -386,8 +386,8 @@ class TestRunAgentUnknownTool:
             _make_response([_make_text_block("ok")]),
         ]
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             # Must not raise
             messages = await run_agent("sys", "go", [], impls={})
 
@@ -401,8 +401,8 @@ class TestRunAgentUnknownTool:
             _make_response([_make_text_block("done")]),
         ]
 
-        with patch("agent_core._get_client", return_value=fake_client):
-            from agent_core import run_agent
+        with patch("duvo.agent_core._get_client", return_value=fake_client):
+            from duvo.agent_core import run_agent
             messages = await run_agent("sys", "go", [], impls={})
 
         # Find tool_result turns
@@ -424,12 +424,12 @@ class TestShortHelper:
     """_short() truncates long dict values and joins items."""
 
     def test_short_basic(self):
-        from agent_core import _short
+        from duvo.agent_core import _short
         result = _short({"key": "value"})
         assert "key=value" in result
 
     def test_short_truncates_long_values(self):
-        from agent_core import _short
+        from duvo.agent_core import _short
         long_val = "x" * 100
         result = _short({"k": long_val})
         # The value should be truncated to 40 chars
@@ -438,19 +438,19 @@ class TestShortHelper:
         assert "k=" in result
 
     def test_short_truncates_overall_to_120(self):
-        from agent_core import _short
+        from duvo.agent_core import _short
         # Many items so the joined string would exceed 120
         big_dict = {f"key{i}": "v" * 50 for i in range(10)}
         result = _short(big_dict)
         assert len(result) <= 120
 
     def test_short_empty_dict(self):
-        from agent_core import _short
+        from duvo.agent_core import _short
         result = _short({})
         assert result == ""
 
     def test_short_non_dict_does_not_raise(self):
-        from agent_core import _short
+        from duvo.agent_core import _short
         # Should not raise for non-dict input
         result = _short("not a dict")
         assert isinstance(result, str)

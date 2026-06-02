@@ -1,12 +1,11 @@
 """HubSpot adapter: custom property + upsert company + evidence note. Same interface as attio."""
 import time
 
-import http_client
-
-import config
-from config import require
-from logging_setup import get_logger
-from models import ICPScore
+from duvo import config
+from duvo.config import require
+from duvo.infra import http_client
+from duvo.infra.logging_setup import get_logger
+from duvo.models import ICPScore
 
 log = get_logger(__name__)
 

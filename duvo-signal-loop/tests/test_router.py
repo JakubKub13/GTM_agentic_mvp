@@ -10,14 +10,13 @@ All tests calling run_router are async (pytest-asyncio auto mode).
 from __future__ import annotations
 
 import sys
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import config
-from models import RunResult
+from duvo import config
+from duvo.models import RunResult
 from tests.conftest import make_score
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,8 +53,7 @@ def _fake_run_agent_factory(tool_sequence: list[str]):
 # Import router after helpers to avoid triggering real Anthropic imports
 # ---------------------------------------------------------------------------
 
-import router  # noqa: E402 — must be after helpers
-
+from duvo.agents import router  # noqa: E402 — must be after helpers
 
 # ---------------------------------------------------------------------------
 # Test: _tool_schema shape
@@ -121,7 +119,7 @@ class TestToolSchema:
             captured["tool_names"] = {t["name"] for t in tools}
             captured["impl_names"] = set(impls.keys())
 
-        with patch("router.run_agent", side_effect=capture_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capture_run_agent):
             await router.run_router(rr, dry_run=True)
 
         assert captured["tool_names"] == expected_names
@@ -139,7 +137,7 @@ class TestDryRunConfidentTier1:
         monkeypatch.setattr(config, "CRM_PROVIDER", "attio")
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(
                 ["crm_upsert", "slack_alert", "outreach_queue", "finish"])):
             await router.run_router(rr, dry_run=True)
 
@@ -150,7 +148,7 @@ class TestDryRunConfidentTier1:
     async def test_slack_status_dry_run_string(self, monkeypatch):
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(
                 ["crm_upsert", "slack_alert", "outreach_queue", "finish"])):
             await router.run_router(rr, dry_run=True)
 
@@ -160,7 +158,7 @@ class TestDryRunConfidentTier1:
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "brevo")
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(
                 ["crm_upsert", "slack_alert", "outreach_queue", "finish"])):
             await router.run_router(rr, dry_run=True)
 
@@ -168,12 +166,12 @@ class TestDryRunConfidentTier1:
         assert "brevo" in rr.outreach_status
 
     async def test_no_real_crm_called_in_dry_run(self, monkeypatch):
-        """writeback.crm.upsert_account must NOT be called in dry-run mode."""
+        """duvo.writeback.crm.upsert_account must NOT be called in dry-run mode."""
         mock_upsert = AsyncMock(return_value="should not be used")
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
-             patch("writeback.crm.upsert_account", mock_upsert):
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
+             patch("duvo.writeback.crm.upsert_account", mock_upsert):
             await router.run_router(rr, dry_run=True)
 
         mock_upsert.assert_not_called()
@@ -184,7 +182,7 @@ class TestDryRunConfidentTier1:
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "lemlist")
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(
                 ["crm_upsert", "outreach_queue"])):
             await router.run_router(rr, dry_run=True)
 
@@ -212,7 +210,7 @@ class TestSafetyGuards:
             result = await impls["slack_alert"]()
             captured_return["slack"] = result
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         assert "refused" in captured_return["slack"]
@@ -233,7 +231,7 @@ class TestSafetyGuards:
             result = await impls["outreach_queue"]()
             captured_return["outreach"] = result
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         assert "refused" in captured_return["outreach"]
@@ -244,7 +242,7 @@ class TestSafetyGuards:
         """crm_upsert has no tier guard and succeeds for any tier in dry-run."""
         rr = _make_run_result(tier="Tier 2", needs_human_research=False)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])):
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])):
             await router.run_router(rr, dry_run=True)
 
         assert "[dry-run]" in rr.crm_status
@@ -265,7 +263,7 @@ class TestConfidentT1Logic:
             captured["slack"] = await impls["slack_alert"]()
             captured["outreach"] = await impls["outreach_queue"]()
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         # Both should NOT be refused
@@ -280,7 +278,7 @@ class TestConfidentT1Logic:
             captured["slack"] = await impls["slack_alert"]()
             captured["outreach"] = await impls["outreach_queue"]()
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         assert "refused" in captured["slack"]
@@ -294,7 +292,7 @@ class TestConfidentT1Logic:
             captured["slack"] = await impls["slack_alert"]()
             captured["outreach"] = await impls["outreach_queue"]()
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         assert "refused" in captured["slack"]
@@ -312,8 +310,8 @@ class TestRealMode:
         sentinel = "attio rec_abc (ICP 8) + evidence note"
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
-             patch("writeback.crm.upsert_account", AsyncMock(return_value=sentinel)) as mock_upsert:
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
+             patch("duvo.writeback.crm.upsert_account", AsyncMock(return_value=sentinel)) as mock_upsert:
             await router.run_router(rr, dry_run=False)
 
         mock_upsert.assert_called_once_with(rr.score)
@@ -323,8 +321,8 @@ class TestRealMode:
         expected = "hubspot company hs_999 (icp_score=8) + evidence note"
         rr = _make_run_result()
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
-             patch("writeback.crm.upsert_account", AsyncMock(return_value=expected)):
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["crm_upsert"])), \
+             patch("duvo.writeback.crm.upsert_account", AsyncMock(return_value=expected)):
             await router.run_router(rr, dry_run=False)
 
         assert rr.crm_status == expected
@@ -334,12 +332,27 @@ class TestRealMode:
         sentinel = "alert posted to #sales"
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["slack_alert"])), \
-             patch("writeback.slack.alert_tier1", AsyncMock(return_value=sentinel)) as mock_alert:
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["slack_alert"])), \
+             patch("duvo.writeback.slack.alert_tier1", AsyncMock(return_value=sentinel)) as mock_alert:
             await router.run_router(rr, dry_run=False)
 
         mock_alert.assert_awaited_once_with(rr.score)
         assert rr.slack_status == sentinel
+
+    async def test_slack_real_mode_failure_recorded_as_failed_not_skipped(self):
+        """If the slack adapter raises in real mode, the status is recorded as
+        'failed: ...' (honest) rather than left as the default 'skipped', and the
+        run does not crash — a failed alert must not block the rest of routing."""
+        rr = _make_run_result(tier="Tier 1", needs_human_research=False)
+
+        boom = AsyncMock(side_effect=RuntimeError("500 Slack down"))
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["slack_alert"])), \
+             patch("duvo.writeback.slack.alert_tier1", boom):
+            # Must not raise out of run_router.
+            await router.run_router(rr, dry_run=False)
+
+        assert rr.slack_status.startswith("failed:")
+        assert "500 Slack down" in rr.slack_status
 
     async def test_outreach_real_mode_confident_t1_calls_adapter(self):
         """In real mode, confident Tier-1 outreach_queue awaits outreach.queue_lead
@@ -349,8 +362,8 @@ class TestRealMode:
         test_email = "rep@example.com"
         expected_email = router.lead_email_for(test_email, rr.score.domain)
 
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
-             patch("writeback.outreach.queue_lead", AsyncMock(return_value=sentinel)) as mock_queue:
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
+             patch("duvo.writeback.outreach.queue_lead", AsyncMock(return_value=sentinel)) as mock_queue:
             await router.run_router(rr, dry_run=False, test_email=test_email)
 
         mock_queue.assert_awaited_once_with(rr.score, expected_email)
@@ -363,8 +376,8 @@ class TestRealMode:
         rr2 = _make_run_result(tier="Tier 1", needs_human_research=False, domain="notino.cz")
 
         mock_queue = AsyncMock(return_value="ok")
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
-             patch("writeback.outreach.queue_lead", mock_queue):
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
+             patch("duvo.writeback.outreach.queue_lead", mock_queue):
             await router.run_router(rr1, dry_run=False, test_email="base@gmail.com")
             await router.run_router(rr2, dry_run=False, test_email="base@gmail.com")
 
@@ -379,8 +392,8 @@ class TestRealMode:
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
         boom = AsyncMock(side_effect=RuntimeError("401 Unauthorized"))
-        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
-             patch("writeback.outreach.queue_lead", boom):
+        with patch("duvo.agents.router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
+             patch("duvo.writeback.outreach.queue_lead", boom):
             # Must not raise out of run_router.
             await router.run_router(rr, dry_run=False)
 
@@ -409,8 +422,8 @@ class TestRealModeSafetyGuardBeforeImport:
         in sys.modules — proves the guard short-circuits before the import.
         """
         # Clear any cached entries for the non-existent modules
-        sys.modules.pop("writeback.slack", None)
-        sys.modules.pop("writeback.outreach", None)
+        sys.modules.pop("duvo.writeback.slack", None)
+        sys.modules.pop("duvo.writeback.outreach", None)
 
         rr = _make_run_result(tier=tier, needs_human_research=needs_human_research)
         captured_returns = {}
@@ -419,7 +432,7 @@ class TestRealModeSafetyGuardBeforeImport:
             captured_returns["slack"] = await impls["slack_alert"]()
             captured_returns["outreach"] = await impls["outreach_queue"]()
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=False)
 
         # Both tools must return the refusal string
@@ -431,11 +444,11 @@ class TestRealModeSafetyGuardBeforeImport:
         assert rr.outreach_status == "skipped"
 
         # The non-existent modules must NOT have been imported
-        assert "writeback.slack" not in sys.modules, (
-            "writeback.slack was imported — guard did not fire before the lazy import"
+        assert "duvo.writeback.slack" not in sys.modules, (
+            "duvo.writeback.slack was imported — guard did not fire before the lazy import"
         )
-        assert "writeback.outreach" not in sys.modules, (
-            "writeback.outreach was imported — guard did not fire before the lazy import"
+        assert "duvo.writeback.outreach" not in sys.modules, (
+            "duvo.writeback.outreach was imported — guard did not fire before the lazy import"
         )
 
 
@@ -444,45 +457,45 @@ class TestRealModeSafetyGuardBeforeImport:
 # ---------------------------------------------------------------------------
 
 class TestLazyImports:
-    """router.py must import without error even when writeback.slack/outreach don't exist."""
+    """duvo.agents.router.py must import without error even when writeback.slack/outreach don't exist."""
 
     def test_router_module_importable(self):
         """Importing router does not raise even if slack/outreach are absent."""
-        import importlib
         # router is already imported; ensure no AttributeError on its public symbols
         assert hasattr(router, "ROUTER_SYSTEM")
         assert hasattr(router, "run_router")
         assert hasattr(router, "_tool_schema")
 
-    async def test_slack_real_mode_raises_runtime_error_without_crashing_router(self):
-        """In real mode with SLACK_WEBHOOK_URL missing, calling slack_alert raises RuntimeError.
+    async def test_slack_real_mode_missing_env_var_recorded_not_propagated(self):
+        """In real mode with SLACK_WEBHOOK_URL missing, slack_alert records the failure
+        honestly instead of propagating.
 
-        The async fake run_agent here captures the RuntimeError rather than letting it
-        propagate — consistent with how run_agent catches tool exceptions in prod.
-        The module now exists; the guard is on the missing env var, not the module.
+        The adapter's ``require(...)`` raises RuntimeError for the missing env var;
+        slack_alert now catches it (like outreach_queue) and records it as
+        ``"failed: ..."`` so the status never silently reads as ``"skipped"`` and the
+        tool call returns cleanly rather than relying on run_agent's generic catch.
         """
-        import config as _cfg
+        from duvo import config as _cfg
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
 
-        error_captured = {}
+        returned = {}
 
         async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
-            try:
-                await impls["slack_alert"]()
-            except RuntimeError as e:
-                error_captured["err"] = str(e)
+            # The tool must NOT raise — it returns a "failed: ..." string.
+            returned["status"] = await impls["slack_alert"]()
 
         original = _cfg.SLACK_WEBHOOK_URL
         _cfg.SLACK_WEBHOOK_URL = ""
         try:
-            with patch("router.run_agent", side_effect=capturing_run_agent):
+            with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
                 await router.run_router(rr, dry_run=False)
         finally:
             _cfg.SLACK_WEBHOOK_URL = original
 
-        # RuntimeError for missing env var should be raised inside the tool, not propagated
-        assert "err" in error_captured, "Expected RuntimeError was not raised"
-        assert "SLACK_WEBHOOK_URL" in error_captured["err"]
+        assert returned["status"].startswith("failed:")
+        assert "SLACK_WEBHOOK_URL" in returned["status"]
+        assert rr.slack_status.startswith("failed:")
+        assert "SLACK_WEBHOOK_URL" in rr.slack_status
 
 
 # ---------------------------------------------------------------------------
@@ -500,7 +513,7 @@ class TestFinishAndLog:
             captured["result"] = await impls["finish"]()
             captured["final_tools"] = set(final_tools)
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         assert captured["result"] == "done"
@@ -514,7 +527,7 @@ class TestFinishAndLog:
         async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             log_received["log"] = log
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True, log=agent_log)
 
         assert log_received["log"] is agent_log
@@ -526,7 +539,7 @@ class TestFinishAndLog:
         async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             captured["max_turns"] = max_turns
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         assert captured["max_turns"] == 6
@@ -547,7 +560,7 @@ class TestUserMessage:
         async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             captured["user"] = user
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         data = json.loads(captured["user"])
@@ -564,7 +577,7 @@ class TestUserMessage:
         async def capturing_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             captured["user"] = user
 
-        with patch("router.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.router.run_agent", side_effect=capturing_run_agent):
             await router.run_router(rr, dry_run=True)
 
         data = json.loads(captured["user"])

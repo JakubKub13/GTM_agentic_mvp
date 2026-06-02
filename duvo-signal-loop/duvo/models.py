@@ -1,6 +1,8 @@
 """Pydantic models — the contract shared across all agents."""
 from __future__ import annotations
+
 from typing import Literal
+
 from pydantic import BaseModel, Field
 
 

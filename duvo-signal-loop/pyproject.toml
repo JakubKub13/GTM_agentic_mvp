@@ -63,8 +63,7 @@ select = [
 ]
 ignore = [
     "E501",  # Line too long (handled by formatter)
-    "W503",  # Line break before binary operator
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["duvo_signal_loop"]
+known-first-party = ["duvo"]

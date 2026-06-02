@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import config
-from models import ICPScore, OutreachDraft
-from writeback import crm
+from duvo import config
+from duvo.models import ICPScore, OutreachDraft
+from duvo.writeback import crm
 
 
 @contextmanager
@@ -66,7 +66,7 @@ async def test_dispatcher_routes_to_attio(score, monkeypatch):
     sentinel = "attio company rec_123 (ICP 8) + evidence note"
     mock_attio_upsert = AsyncMock(return_value=sentinel)
 
-    with patch("writeback.attio.upsert_account", mock_attio_upsert):
+    with patch("duvo.writeback.attio.upsert_account", mock_attio_upsert):
         result = await crm.upsert_account(score)
 
     mock_attio_upsert.assert_called_once_with(score)
@@ -80,7 +80,7 @@ async def test_dispatcher_routes_to_hubspot(score, monkeypatch):
     sentinel = "company hs_456 (icp_score=8) + evidence note"
     mock_hubspot_upsert = AsyncMock(return_value=sentinel)
 
-    with patch("writeback.hubspot.upsert_account", mock_hubspot_upsert):
+    with patch("duvo.writeback.hubspot.upsert_account", mock_hubspot_upsert):
         result = await crm.upsert_account(score)
 
     mock_hubspot_upsert.assert_called_once_with(score)
@@ -92,7 +92,7 @@ async def test_dispatcher_returns_provider_result(score, monkeypatch):
     monkeypatch.setattr(config, "CRM_PROVIDER", "attio")
 
     expected = "attio company abc (ICP 8) + evidence note"
-    with patch("writeback.attio.upsert_account", AsyncMock(return_value=expected)):
+    with patch("duvo.writeback.attio.upsert_account", AsyncMock(return_value=expected)):
         assert await crm.upsert_account(score) == expected
 
 
@@ -100,7 +100,7 @@ def test_importing_crm_without_hubspot_token(monkeypatch):
     """Importing writeback.crm should succeed even when HUBSPOT_TOKEN is absent."""
     monkeypatch.setattr(config, "HUBSPOT_TOKEN", "")
     # Should not raise at import time
-    from writeback import crm  # noqa: F401
+    from duvo.writeback import crm  # noqa: F401
     assert crm is not None
 
 
@@ -116,7 +116,7 @@ async def test_unknown_provider_routes_to_attio_and_warns(score, monkeypatch):
     mock_attio_upsert = AsyncMock(return_value=sentinel)
 
     with _capture_duvo_logs(logging.WARNING) as records:
-        with patch("writeback.attio.upsert_account", mock_attio_upsert):
+        with patch("duvo.writeback.attio.upsert_account", mock_attio_upsert):
             result = await crm.upsert_account(score)
 
     mock_attio_upsert.assert_called_once_with(score)
@@ -132,7 +132,7 @@ async def test_attio_provider_does_not_warn(score, monkeypatch):
     monkeypatch.setattr(config, "CRM_PROVIDER", "attio")
 
     with _capture_duvo_logs(logging.WARNING) as records:
-        with patch("writeback.attio.upsert_account", AsyncMock(return_value="ok")):
+        with patch("duvo.writeback.attio.upsert_account", AsyncMock(return_value="ok")):
             await crm.upsert_account(score)
 
     unknown_warns = [r for r in records if "unknown CRM_PROVIDER" in r.getMessage()]

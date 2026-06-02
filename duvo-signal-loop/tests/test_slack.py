@@ -3,10 +3,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import config
+from duvo import config
+from duvo.writeback import slack
 from tests.conftest import _fake_response, make_fake_async_client, make_score
-from writeback import slack
-
 
 # ---------------------------------------------------------------------------
 # alert_tier1 — happy path
@@ -18,7 +17,7 @@ class TestAlertTier1:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await slack.alert_tier1(make_score())
 
         call_url = client.post.call_args[0][0]
@@ -29,7 +28,7 @@ class TestAlertTier1:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await slack.alert_tier1(make_score())
 
         kwargs = client.post.call_args[1]
@@ -43,7 +42,7 @@ class TestAlertTier1:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await slack.alert_tier1(make_score())
 
         body = client.post.call_args[1]["json"]
@@ -58,7 +57,7 @@ class TestAlertTier1:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await slack.alert_tier1(make_score())
 
         assert result == "alert posted to #sales"
@@ -68,7 +67,7 @@ class TestAlertTier1:
         err_resp = _fake_response(400, raise_on_raise=True)
         client = make_fake_async_client(post=AsyncMock(return_value=err_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 400"):
                 await slack.alert_tier1(make_score())
 
@@ -82,6 +81,6 @@ class TestRequireWebhookUrl:
         monkeypatch.setattr(config, "SLACK_WEBHOOK_URL", "")
         client = make_fake_async_client(post=AsyncMock(return_value=_fake_response(200)))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(RuntimeError, match="SLACK_WEBHOOK_URL"):
                 await slack.alert_tier1(make_score())

@@ -1,26 +1,25 @@
 """Tests for logging_setup.py — central logging infrastructure."""
 import logging
-import pytest
 
 
 class TestGetLogger:
     def test_get_logger_returns_logger_named_under_duvo_namespace(self):
         """get_logger('x') returns a Logger named 'duvo.x'."""
-        from logging_setup import get_logger
+        from duvo.infra.logging_setup import get_logger
 
         logger = get_logger("x")
         assert logger.name == "duvo.x"
 
     def test_get_logger_returns_logging_logger_instance(self):
         """get_logger returns a standard logging.Logger."""
-        from logging_setup import get_logger
+        from duvo.infra.logging_setup import get_logger
 
         logger = get_logger("some_module")
         assert isinstance(logger, logging.Logger)
 
     def test_get_logger_different_names_return_different_loggers(self):
         """Different names give distinct loggers."""
-        from logging_setup import get_logger
+        from duvo.infra.logging_setup import get_logger
 
         a = get_logger("alpha")
         b = get_logger("beta")
@@ -38,7 +37,7 @@ class TestGetLogger:
         duvo_logger = logging.getLogger("duvo")
         duvo_logger.handlers.clear()
 
-        from logging_setup import get_logger
+        from duvo.infra.logging_setup import get_logger
 
         _log = get_logger("bootstrap_test")
 
@@ -57,7 +56,7 @@ class TestConfigureLogging:
 
     def test_configure_logging_adds_handler_to_duvo_logger(self):
         """configure_logging() attaches at least one handler to the 'duvo' logger."""
-        from logging_setup import configure_logging
+        from duvo.infra.logging_setup import configure_logging
 
         configure_logging()
         duvo_logger = logging.getLogger("duvo")
@@ -65,7 +64,7 @@ class TestConfigureLogging:
 
     def test_configure_logging_is_idempotent(self):
         """Calling configure_logging() twice does NOT multiply handlers."""
-        from logging_setup import configure_logging
+        from duvo.infra.logging_setup import configure_logging
 
         configure_logging()
         configure_logging()
@@ -74,7 +73,7 @@ class TestConfigureLogging:
 
     def test_configure_logging_sets_level_on_duvo_logger(self):
         """configure_logging('DEBUG') sets the 'duvo' logger level to DEBUG."""
-        from logging_setup import configure_logging
+        from duvo.infra.logging_setup import configure_logging
 
         configure_logging("DEBUG")
         duvo_logger = logging.getLogger("duvo")
@@ -82,8 +81,8 @@ class TestConfigureLogging:
 
     def test_configure_logging_defaults_to_config_log_level(self):
         """configure_logging() with no arg uses config.LOG_LEVEL."""
-        import config
-        from logging_setup import configure_logging
+        from duvo import config
+        from duvo.infra.logging_setup import configure_logging
 
         configure_logging()
         duvo_logger = logging.getLogger("duvo")
@@ -92,7 +91,7 @@ class TestConfigureLogging:
 
     def test_propagate_is_false(self):
         """The 'duvo' logger must never propagate to the root logger."""
-        from logging_setup import configure_logging
+        from duvo.infra.logging_setup import configure_logging
 
         configure_logging()
         duvo_logger = logging.getLogger("duvo")
@@ -100,7 +99,7 @@ class TestConfigureLogging:
 
     def test_handler_level_updated_on_reconfigure(self, caplog):
         """INFO then DEBUG reconfigure leaves handler at DEBUG — records propagate."""
-        from logging_setup import configure_logging, get_logger
+        from duvo.infra.logging_setup import configure_logging
 
         configure_logging("INFO")
         configure_logging("DEBUG")
@@ -111,7 +110,7 @@ class TestConfigureLogging:
 
     def test_bogus_level_falls_back_to_info(self):
         """An unrecognised level string falls back to INFO (level 20)."""
-        from logging_setup import configure_logging
+        from duvo.infra.logging_setup import configure_logging
 
         configure_logging("NONSENSE_LEVEL")
         duvo_logger = logging.getLogger("duvo")

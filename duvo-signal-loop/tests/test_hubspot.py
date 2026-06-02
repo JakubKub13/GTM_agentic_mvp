@@ -3,12 +3,11 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import config
-from models import ICPScore
+from duvo import config
+from duvo.models import ICPScore
+from duvo.writeback import hubspot
 from tests.conftest import _fake_response, make_fake_async_client
 from tests.conftest import make_score as _make_score
-from writeback import hubspot
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -88,7 +87,7 @@ class TestEnsureIcpProperty:
             post=AsyncMock(return_value=_fake_response(200)),
         )
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await hubspot.ensure_icp_property()
 
         client.get.assert_called_once()
@@ -103,7 +102,7 @@ class TestEnsureIcpProperty:
             post=AsyncMock(return_value=post_resp),
         )
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await hubspot.ensure_icp_property()
 
         client.post.assert_called_once()
@@ -127,7 +126,7 @@ class TestUpsertCompany:
             patch=AsyncMock(return_value=patch_resp),
         )
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await hubspot._upsert_company(make_score())
 
         assert result == existing_id
@@ -146,7 +145,7 @@ class TestUpsertCompany:
             patch=AsyncMock(return_value=_fake_response(200)),
         )
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await hubspot._upsert_company(make_score())
 
         assert result == new_id
@@ -164,7 +163,7 @@ class TestUpsertCompany:
             patch=AsyncMock(return_value=patch_resp),
         )
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await hubspot._upsert_company(make_score())
 
         props = client.patch.call_args[1]["json"]["properties"]
@@ -177,7 +176,7 @@ class TestUpsertCompany:
 
         client = make_fake_async_client(post=AsyncMock(return_value=error_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 400"):
                 await hubspot._upsert_company(make_score())
 
@@ -191,7 +190,7 @@ class TestUpsertCompany:
             post=AsyncMock(side_effect=[search_resp, error_resp]),
         )
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 500"):
                 await hubspot._upsert_company(make_score())
 
@@ -208,7 +207,7 @@ class TestCreateNote:
 
         client = make_fake_async_client(post=AsyncMock(return_value=error_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 503"):
                 await hubspot._create_note(make_score(), "company_123")
 
@@ -232,7 +231,7 @@ class TestUpsertAccount:
             post=AsyncMock(side_effect=[search_resp, create_resp, note_resp]),
         )
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await hubspot.upsert_account(make_score())
 
         assert company_id in result
@@ -252,7 +251,7 @@ class TestUpsertAccount:
             post=AsyncMock(side_effect=[search_resp, create_resp, note_resp]),
         )
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await hubspot.upsert_account(make_score())
 
         assert "evidence note" in result

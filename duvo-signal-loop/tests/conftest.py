@@ -1,7 +1,7 @@
 """Shared test helpers for the duvo-signal-loop test suite."""
 from unittest.mock import AsyncMock, MagicMock
 
-from models import ICPScore, OutreachDraft
+from duvo.models import ICPScore, OutreachDraft
 
 
 def _fake_response(status_code: int, json_data: dict | None = None, raise_on_raise: bool = False):
@@ -37,7 +37,7 @@ def make_fake_async_client(
         client = make_fake_async_client(
             post=AsyncMock(return_value=_fake_response(201, {"id": "abc"})),
         )
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await my_module.some_func(score)
     """
     client = MagicMock()

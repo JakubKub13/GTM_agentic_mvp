@@ -3,10 +3,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-import config
+from duvo import config
+from duvo.writeback import lemlist
 from tests.conftest import _fake_response, make_fake_async_client, make_score
-from writeback import lemlist
-
 
 # ---------------------------------------------------------------------------
 # queue_lead — happy path
@@ -19,7 +18,7 @@ class TestQueueLead:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await lemlist.queue_lead(make_score(), "lead@example.com")
 
         call_url = client.post.call_args[0][0]
@@ -31,7 +30,7 @@ class TestQueueLead:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await lemlist.queue_lead(make_score(), "lead@example.com")
 
         kwargs = client.post.call_args[1]
@@ -43,7 +42,7 @@ class TestQueueLead:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await lemlist.queue_lead(make_score(), "lead@example.com")
 
         kwargs = client.post.call_args[1]
@@ -56,7 +55,7 @@ class TestQueueLead:
         score = make_score()
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await lemlist.queue_lead(score, "lead@example.com")
 
         body = client.post.call_args[1]["json"]
@@ -73,7 +72,7 @@ class TestQueueLead:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await lemlist.queue_lead(make_score(), "lead@example.com")
 
         assert "cam_abc123" in result
@@ -85,7 +84,7 @@ class TestQueueLead:
         err_resp = _fake_response(422, raise_on_raise=True)
         client = make_fake_async_client(post=AsyncMock(return_value=err_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(Exception, match="HTTP 422"):
                 await lemlist.queue_lead(make_score(), "lead@example.com")
 
@@ -96,7 +95,7 @@ class TestQueueLead:
         ok_resp = _fake_response(200)
         client = make_fake_async_client(post=AsyncMock(return_value=ok_resp))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             await lemlist.queue_lead(make_score(), "lead@example.com")
 
         for c in client.post.call_args_list:
@@ -114,7 +113,7 @@ class TestRequireKeys:
         monkeypatch.setattr(config, "LEMLIST_CAMPAIGN_ID", "cam_abc123")
         client = make_fake_async_client(post=AsyncMock(return_value=_fake_response(200)))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(RuntimeError, match="LEMLIST_API_KEY"):
                 await lemlist.queue_lead(make_score(), "lead@example.com")
 
@@ -123,6 +122,6 @@ class TestRequireKeys:
         monkeypatch.setattr(config, "LEMLIST_CAMPAIGN_ID", "")
         client = make_fake_async_client(post=AsyncMock(return_value=_fake_response(200)))
 
-        with patch("http_client.get_client", return_value=client):
+        with patch("duvo.infra.http_client.get_client", return_value=client):
             with pytest.raises(RuntimeError, match="LEMLIST_CAMPAIGN_ID"):
                 await lemlist.queue_lead(make_score(), "lead@example.com")

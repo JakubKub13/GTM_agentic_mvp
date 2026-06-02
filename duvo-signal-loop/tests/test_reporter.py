@@ -1,10 +1,8 @@
 """Tests for reporter.py — HTML generation from RunResult objects."""
 import os
-import pytest
 
+from duvo.models import RunResult, Signal
 from tests.conftest import make_score
-from models import RunResult, Signal
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -54,7 +52,7 @@ def _make_result(
 
 class TestGenerateReport:
     def test_creates_file_and_returns_path(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         results = [_make_result()]
         out_path = str(tmp_path / "sub" / "report.html")
@@ -64,7 +62,7 @@ class TestGenerateReport:
         assert os.path.isfile(out_path)
 
     def test_html_contains_company_names(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         r1 = _make_result(company_name="Acme Corp")
         r2 = _make_result(company_name="Beta Ltd", domain="beta.com", score=5, tier="Tier 2")
@@ -76,7 +74,7 @@ class TestGenerateReport:
         assert "Beta Ltd" in html
 
     def test_html_contains_score_badges(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         r = _make_result(score=8)
         out_path = str(tmp_path / "r.html")
@@ -86,7 +84,7 @@ class TestGenerateReport:
         assert "8/10" in html
 
     def test_tier_css_classes(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         r1 = _make_result(score=9, tier="Tier 1")
         r2 = _make_result(company_name="Beta Ltd", domain="beta.com", score=5, tier="Tier 2")
@@ -101,7 +99,7 @@ class TestGenerateReport:
         assert 'class="badge t3"' in html
 
     def test_html_contains_signal_titles(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         sig = _make_signal(title="Big ERP Migration Announcement")
         r = _make_result(signals=[sig])
@@ -112,7 +110,7 @@ class TestGenerateReport:
         assert "Big ERP Migration Announcement" in html
 
     def test_html_contains_outreach_subject_and_first_line(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         icp = make_score(
             outreach_subject="Custom Subject Line",
@@ -134,7 +132,7 @@ class TestGenerateReport:
         assert "Hi, this is the first line." in html
 
     def test_html_contains_agent_log_entries(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         r = _make_result(agent_log=["tool_call_alpha()", "tool_call_beta()"])
         out_path = str(tmp_path / "r.html")
@@ -145,7 +143,7 @@ class TestGenerateReport:
         assert "tool_call_beta()" in html
 
     def test_html_contains_crm_slack_outreach_statuses(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         r = _make_result(crm_status="created", slack_status="sent", outreach_status="enrolled")
         out_path = str(tmp_path / "r.html")
@@ -157,7 +155,7 @@ class TestGenerateReport:
         assert "enrolled" in html
 
     def test_results_sorted_by_score_descending(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         low = _make_result(company_name="LowCo", domain="low.com", score=3, tier="Tier 3")
         high = _make_result(company_name="HighCo", domain="high.com", score=9, tier="Tier 1")
@@ -181,7 +179,7 @@ class TestGenerateReport:
 class TestDirnameGuard:
     def test_no_raise_when_path_has_no_directory(self, tmp_path, monkeypatch):
         """generate_report('r.html') in a flat cwd must not raise via makedirs('')."""
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         monkeypatch.chdir(tmp_path)
         results = [_make_result()]
@@ -197,7 +195,7 @@ class TestDirnameGuard:
 
 class TestAutoescape:
     def test_special_chars_escaped(self, tmp_path):
-        from reporter import generate_report
+        from duvo.reporting.reporter import generate_report
 
         icp = make_score(company_name="A & B <X>", domain="ab.com")
         r = RunResult(

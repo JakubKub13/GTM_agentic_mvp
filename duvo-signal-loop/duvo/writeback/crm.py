@@ -1,7 +1,7 @@
 """CRM dispatcher — the single interface the router uses; provider chosen by CRM_PROVIDER."""
-import config
-from logging_setup import get_logger
-from models import ICPScore
+from duvo import config
+from duvo.infra.logging_setup import get_logger
+from duvo.models import ICPScore
 
 log = get_logger(__name__)
 
@@ -22,11 +22,11 @@ async def upsert_account(score: ICPScore) -> str:
     log.info("CRM dispatcher: routing to provider=%s for company=%s", provider, score.company_name)
 
     if provider == "hubspot":
-        from writeback import hubspot
+        from duvo.writeback import hubspot
         return await hubspot.upsert_account(score)
 
     if provider != "attio":
         log.warning("unknown CRM_PROVIDER=%r — defaulting to attio", provider)
 
-    from writeback import attio
+    from duvo.writeback import attio
     return await attio.upsert_account(score)

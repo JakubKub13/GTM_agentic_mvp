@@ -3,8 +3,9 @@ import inspect
 from collections.abc import Callable, Iterable
 
 from anthropic import AsyncAnthropic
-from config import ANTHROPIC_API_KEY, ANTHROPIC_TIMEOUT_SECONDS, CLAUDE_MODEL, require
-from logging_setup import get_logger
+
+from duvo.config import ANTHROPIC_API_KEY, ANTHROPIC_TIMEOUT_SECONDS, CLAUDE_MODEL, require
+from duvo.infra.logging_setup import get_logger
 
 _log = get_logger(__name__)
 

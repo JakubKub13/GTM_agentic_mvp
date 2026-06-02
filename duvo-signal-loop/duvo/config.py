@@ -1,5 +1,6 @@
 """Credentials + model. Exa + Anthropic always required; write-back keys validated lazily."""
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv()

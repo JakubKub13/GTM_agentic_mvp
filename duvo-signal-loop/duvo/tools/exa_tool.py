@@ -2,8 +2,9 @@
 import asyncio
 
 from exa_py import Exa
-from config import EXA_API_KEY, require
-from logging_setup import get_logger
+
+from duvo.config import EXA_API_KEY, require
+from duvo.infra.logging_setup import get_logger
 
 _log = get_logger(__name__)
 

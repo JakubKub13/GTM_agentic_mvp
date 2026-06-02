@@ -5,21 +5,21 @@ from pydantic import ValidationError
 
 class TestCompany:
     def test_construction_with_required_fields(self):
-        from models import Company
+        from duvo.models import Company
 
         c = Company(name="Acme", domain="acme.com")
         assert c.name == "Acme"
         assert c.domain == "acme.com"
 
     def test_optional_fields_default_to_empty_string(self):
-        from models import Company
+        from duvo.models import Company
 
         c = Company(name="Acme", domain="acme.com")
         assert c.country == ""
         assert c.description == ""
 
     def test_missing_required_field_raises_validation_error(self):
-        from models import Company
+        from duvo.models import Company
 
         with pytest.raises(ValidationError):
             Company(name="Acme")  # domain is required
@@ -27,7 +27,7 @@ class TestCompany:
 
 class TestSignal:
     def test_construction_with_required_fields(self):
-        from models import Signal
+        from duvo.models import Signal
 
         s = Signal(
             signal_type="erp_migration",
@@ -39,7 +39,7 @@ class TestSignal:
         assert s.title == "New ERP rollout"
 
     def test_published_date_defaults_to_none(self):
-        from models import Signal
+        from duvo.models import Signal
 
         s = Signal(
             signal_type="hiring",
@@ -50,7 +50,7 @@ class TestSignal:
         assert s.published_date is None
 
     def test_relevance_defaults_to_empty_string(self):
-        from models import Signal
+        from duvo.models import Signal
 
         s = Signal(
             signal_type="pain",
@@ -62,7 +62,7 @@ class TestSignal:
 
     def test_all_valid_signal_types_accepted(self):
         """Each valid Literal value constructs without error."""
-        from models import Signal
+        from duvo.models import Signal
 
         valid_types = ["erp_migration", "hiring", "ma_leadership", "pain"]
         for st in valid_types:
@@ -71,7 +71,7 @@ class TestSignal:
 
     def test_invalid_signal_type_raises_validation_error(self):
         """An out-of-contract signal_type must raise ValidationError."""
-        from models import Signal
+        from duvo.models import Signal
 
         with pytest.raises(ValidationError):
             Signal(signal_type="unknown_type", title="t", summary="s", source_url="u")
@@ -79,7 +79,7 @@ class TestSignal:
 
 class TestOutreachDraft:
     def test_construction_with_all_fields(self):
-        from models import OutreachDraft
+        from duvo.models import OutreachDraft
 
         d = OutreachDraft(
             persona="VP Sales",
@@ -91,7 +91,7 @@ class TestOutreachDraft:
         assert d.subject == "Quick question"
 
     def test_missing_required_field_raises_validation_error(self):
-        from models import OutreachDraft
+        from duvo.models import OutreachDraft
 
         with pytest.raises(ValidationError):
             OutreachDraft(persona="VP Sales")  # subject, first_line, body required
@@ -99,7 +99,7 @@ class TestOutreachDraft:
 
 class TestICPScore:
     def _make_outreach(self):
-        from models import OutreachDraft
+        from duvo.models import OutreachDraft
         return OutreachDraft(
             persona="VP Sales",
             subject="Subject",
@@ -108,7 +108,7 @@ class TestICPScore:
         )
 
     def test_construction_with_required_fields(self):
-        from models import ICPScore
+        from duvo.models import ICPScore
 
         score = ICPScore(
             company_name="Rohlik",
@@ -128,7 +128,7 @@ class TestICPScore:
         assert score.tier == "Tier 1"
 
     def test_embeds_outreach_draft(self):
-        from models import ICPScore, OutreachDraft
+        from duvo.models import ICPScore, OutreachDraft
 
         score = ICPScore(
             company_name="X",
@@ -147,7 +147,7 @@ class TestICPScore:
         assert isinstance(score.outreach, OutreachDraft)
 
     def test_missing_required_field_raises_validation_error(self):
-        from models import ICPScore
+        from duvo.models import ICPScore
 
         with pytest.raises(ValidationError):
             # score field missing
@@ -167,7 +167,7 @@ class TestICPScore:
 
     def test_score_below_range_raises_validation_error(self):
         """score=0 is below the 1-10 constraint and must raise ValidationError."""
-        from models import ICPScore
+        from duvo.models import ICPScore
 
         with pytest.raises(ValidationError):
             ICPScore(
@@ -187,7 +187,7 @@ class TestICPScore:
 
     def test_score_above_range_raises_validation_error(self):
         """score=11 is above the 1-10 constraint and must raise ValidationError."""
-        from models import ICPScore
+        from duvo.models import ICPScore
 
         with pytest.raises(ValidationError):
             ICPScore(
@@ -207,7 +207,7 @@ class TestICPScore:
 
     def test_invalid_tier_raises_validation_error(self):
         """A tier value outside the Literal raises ValidationError."""
-        from models import ICPScore
+        from duvo.models import ICPScore
 
         with pytest.raises(ValidationError):
             ICPScore(
@@ -227,7 +227,7 @@ class TestICPScore:
 
     def test_invalid_confidence_raises_validation_error(self):
         """A confidence value outside the Literal raises ValidationError."""
-        from models import ICPScore
+        from duvo.models import ICPScore
 
         with pytest.raises(ValidationError):
             ICPScore(
@@ -247,7 +247,7 @@ class TestICPScore:
 
     def test_all_valid_tiers_accepted(self):
         """Each valid tier Literal constructs without error."""
-        from models import ICPScore
+        from duvo.models import ICPScore
 
         for tier in ["Tier 1", "Tier 2", "Tier 3"]:
             score = ICPScore(
@@ -268,7 +268,7 @@ class TestICPScore:
 
     def test_all_valid_confidences_accepted(self):
         """Each valid confidence Literal constructs without error."""
-        from models import ICPScore
+        from duvo.models import ICPScore
 
         for conf in ["high", "medium", "low"]:
             score = ICPScore(
@@ -290,7 +290,7 @@ class TestICPScore:
 
 class TestRunResult:
     def _make_score(self):
-        from models import ICPScore, OutreachDraft
+        from duvo.models import ICPScore, OutreachDraft
         return ICPScore(
             company_name="Rohlik",
             domain="rohlik.cz",
@@ -312,7 +312,7 @@ class TestRunResult:
         )
 
     def test_construction_with_required_fields(self):
-        from models import RunResult
+        from duvo.models import RunResult
 
         r = RunResult(score=self._make_score(), signals=[])
         # Real value round-trip assertion instead of tautological 'is not None'.
@@ -320,7 +320,7 @@ class TestRunResult:
         assert r.signals == []
 
     def test_default_statuses_are_skipped(self):
-        from models import RunResult
+        from duvo.models import RunResult
 
         r = RunResult(score=self._make_score(), signals=[])
         assert r.crm_status == "skipped"
@@ -328,7 +328,7 @@ class TestRunResult:
         assert r.outreach_status == "skipped"
 
     def test_agent_log_defaults_to_empty_list(self):
-        from models import RunResult
+        from duvo.models import RunResult
 
         r = RunResult(score=self._make_score(), signals=[])
         assert r.agent_log == []

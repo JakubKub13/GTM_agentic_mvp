@@ -2,11 +2,11 @@
 import asyncio
 from typing import Literal
 
-from config import MAX_SCOUT_SEARCHES
-from models import Company, Signal
-from agent_core import run_agent
-from tools.exa_tool import EXA_SEARCH_TOOL, exa_search
-from logging_setup import get_logger
+from duvo.agent_core import run_agent
+from duvo.config import MAX_SCOUT_SEARCHES
+from duvo.infra.logging_setup import get_logger
+from duvo.models import Company, Signal
+from duvo.tools.exa_tool import EXA_SEARCH_TOOL, exa_search
 
 _log = get_logger(__name__)
 
