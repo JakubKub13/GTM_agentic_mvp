@@ -41,51 +41,56 @@ as variations on them.
 
 Read bottom-up: contract and runtime first, then the agents that ride on them, then
 orchestration. Each step says *why it comes here* and *what to extract*. Read the
-files directly — most are short.
+files directly — most are short. The runtime lives under the `duvo/` package; `main.py`
+at the repo root is a thin shim that calls `duvo.orchestrator.main`.
 
 1. **`README.md`** — the author's own framing, the architecture diagram, the
    "where agency is bounded" and "where it breaks" sections. Orients you fast.
-2. **`config.py`** — every env var, the `require()` pattern (required keys raise;
+2. **`duvo/config.py`** — every env var, the `require()` pattern (required keys raise;
    write-back keys validated lazily so `--dry-run` works without a full `.env`),
    the hardcoded model, and the concurrency/timeout knobs. *Extract:* what's
    required vs optional, and the tunable limits.
-3. **`models.py`** — the Pydantic contract shared by all agents. *Extract:* the 4
+3. **`duvo/models.py`** — the Pydantic contract shared by all agents. *Extract:* the 4
    signal-type `Literal`s, `ICPScore.score = Field(ge=1, le=10)`, the tier/confidence
    `Literal`s. These constraints are *why* the analyst defends so hard downstream.
-4. **`agent_core.py`** — the heart. Read `run_agent` line by line. *Extract:* the
+4. **`duvo/agent_core.py`** — the heart. Read `run_agent` line by line. *Extract:* the
    loop (call → dispatch tool_use → feed results → repeat to a final tool or
    `max_turns`); sync/async tool polymorphism via `inspect.isawaitable`; errors
    and unknown tools become tool_results instead of crashing; the lazy
    `AsyncAnthropic` singleton; the `log` list that captures every tool call.
-5. **`http_client.py`** + **`logging_setup.py`** — the shared pooled
-   `httpx.AsyncClient` singleton (drained once in `main`'s `finally`) and the single
-   `duvo.*` logger tree (idempotent, `propagate=False`, secrets never logged).
-6. **`tools/exa_tool.py`** — the one search tool both scouts and analyst use. *Extract:*
-   `exa-py` is sync-only, so it's offloaded via `asyncio.to_thread` to keep the loop
-   responsive; results are formatted to a compact string; failures return a string,
-   not an exception.
-7. **`scouts.py`** — 4 concurrent scout agents. *Extract:* the 4 `BEATS` (matching the
-   signal `Literal`s), `asyncio.gather` fan-out, `_run_scout_safe` per-beat isolation,
-   the "never invent / sourced only" prompt, and that `signal_type` is set by the beat,
-   not the model.
-8. **`analyst.py`** — the defensive core. *Extract:* the ICP definition; that the model
-   may run verification searches; and especially the two-layer defense — (a) per-field
-   coercion/clamping before constructing `ICPScore`, and (b) `apply_guards()`, a pure
-   deterministic function that overrides the model's tier and caps hallucinated
-   confidence. Read `apply_guards` rules in order; this is half the "bounded agency".
-9. **`router.py`** — the never-send safety layer. *Extract:* `confident_t1` computed
-   in code (not by the model); the self-guarding tools where the safety check runs
-   *before* the lazy `import` and any `await`; that nothing is ever auto-sent (queue /
-   paused only); and `dry_run` returning `[dry-run] …` strings.
-10. **`writeback/`** — the pluggable stack. Read `crm.py` and `outreach.py`
+5. **`duvo/infra/http_client.py`** + **`duvo/infra/logging_setup.py`** — the shared
+   pooled `httpx.AsyncClient` singleton (drained once in the orchestrator's `finally`)
+   and the single `duvo.*` logger tree (idempotent, `propagate=False`, secrets never
+   logged).
+6. **`duvo/tools/exa_tool.py`** — the one search tool both scouts and analyst use.
+   *Extract:* `exa-py` is sync-only, so it's offloaded via `asyncio.to_thread` to keep
+   the loop responsive; results are formatted to a compact string; failures return a
+   string, not an exception.
+7. **`duvo/agents/scouts.py`** — 4 concurrent scout agents. *Extract:* the 4 `BEATS`
+   (matching the signal `Literal`s), `asyncio.gather` fan-out, `_run_scout_safe`
+   per-beat isolation, the "never invent / sourced only" prompt, and that
+   `signal_type` is set by the beat, not the model.
+8. **`duvo/agents/analyst.py`** — the defensive core. *Extract:* the ICP definition;
+   that the model may run verification searches; and especially the two-layer
+   defense — (a) per-field coercion/clamping before constructing `ICPScore`, and (b)
+   `apply_guards()`, a pure deterministic function that overrides the model's tier and
+   caps hallucinated confidence. Read `apply_guards` rules in order; this is half the
+   "bounded agency".
+9. **`duvo/agents/router.py`** — the never-send safety layer. *Extract:* `confident_t1`
+   computed in code (not by the model); the self-guarding tools where the safety check
+   runs *before* the lazy `import` and any `await`; that nothing is ever auto-sent
+   (queue / paused only); and `dry_run` returning `[dry-run] …` strings.
+10. **`duvo/writeback/`** — the pluggable stack. Read `crm.py` and `outreach.py`
     (dispatchers: provider read at call time, unknown → warn + default), then one
     adapter pair (`attio.py`, `brevo.py`) for the payload-fallback robustness pattern.
     `slack.py`, `hubspot.py`, `lemlist.py` follow the same shape.
-11. **`main.py`** — the orchestrator. *Extract:* `asyncio.gather` over all accounts,
-    `Semaphore` bound, `_process_account`'s triple isolation (semaphore +
-    `asyncio.timeout` + try/except → `None`), and `http_client.aclose()` in `finally`.
-12. **`reporter.py`** + **`templates/report.html`** — the only deliberately *sync*
-    module (pure CPU/file I/O) and the audit dashboard it renders.
+11. **`duvo/orchestrator.py`** (entry shim: `main.py`) — the conductor. *Extract:*
+    `asyncio.gather` over all accounts, `Semaphore` bound, `_process_account`'s triple
+    isolation (semaphore + `asyncio.timeout` + try/except → `None`), and
+    `http_client.aclose()` in `finally`.
+12. **`duvo/reporting/reporter.py`** + **`duvo/reporting/templates/report.html`** — the
+    only deliberately *sync* module (pure CPU/file I/O) and the audit dashboard it
+    renders.
 13. **`tests/` (skim)** — confirm the contracts. Start with `test_agent_core.py` (loop
     edge cases incl. falsy-return non-await) and `test_router.py` (the
     guard-fires-before-lazy-import proof via `sys.modules`). The pattern across

@@ -3,6 +3,10 @@
 The deep map. Use it to go deep on one area or to verify your reading of the code.
 The code is the source of truth; if this drifts, trust the code and flag the drift.
 
+The runtime lives under the `duvo/` package; `main.py` at the repo root is a thin
+shim that calls `duvo.orchestrator.main` (so `uv run python main.py` and
+`python -m duvo.orchestrator` both work).
+
 ## Table of contents
 
 1. What the project is
@@ -31,8 +35,8 @@ the fully-mocked offline test suite.
 
 ## 2. The core idea: one runtime, many agents
 
-`agent_core.run_agent()` (`agent_core.py:32`) is the single primitive. Every agent is a
-different `(system, tools, impls)` triple over the same loop:
+`agent_core.run_agent()` (`duvo/agent_core.py:33`) is the single primitive. Every agent
+is a different `(system, tools, impls)` triple over the same loop:
 
 1. `messages.create` with conversation + tools.
 2. Append assistant response; extract `tool_use` blocks. None → return.
@@ -54,14 +58,14 @@ Design choices to notice:
 
 ## 3. The per-account pipeline (orchestration)
 
-`main.run()` (`main.py:74`):
+`orchestrator.run()` (`duvo/orchestrator.py:74`):
 - Loads `companies.csv` → `list[Company]`.
 - `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)` (default 5).
 - `asyncio.gather` over all accounts, each in `_process_account`.
 - `finally: await http_client.aclose()` — pool always drained, even if every account fails.
 - Filters `None`, renders report.
 
-`_process_account` (`main.py:29`) — triple isolation:
+`_process_account` (`duvo/orchestrator.py:29`) — triple isolation:
 - `async with semaphore` → bounded concurrency.
 - `async with asyncio.timeout(ACCOUNT_TIMEOUT_SECONDS)` (300s) → one hung account can't
   stall the batch.
@@ -73,7 +77,7 @@ Design choices to notice:
 
 ## 4. The three agent roles
 
-### Scouts (`scouts.py`) — 4 concurrent signal hunters
+### Scouts (`duvo/agents/scouts.py`) — 4 concurrent signal hunters
 - Four `BEATS`: `erp_migration`, `hiring`, `ma_leadership`, `pain` — matching
   `Signal.signal_type` `Literal`s.
 - `scout_all` fans out via `asyncio.gather`; each wrapped in `_run_scout_safe` so one
@@ -85,7 +89,7 @@ Design choices to notice:
 - Results re-validated into `Signal`s with `signal_type` forced to the beat's key — the
   model never picks the type.
 
-### Analyst (`analyst.py`) — validate, score, draft + deterministic guards
+### Analyst (`duvo/agents/analyst.py`) — validate, score, draft + deterministic guards
 - `run_agent` with `exa_search` (verify doubtful signals, max `MAX_ANALYST_SEARCHES`=2)
   + `record_assessment` (final). Given the full `ICP_DEFINITION` and the signals as JSON.
 - **Two-layer defense** (assumes the LLM misbehaves):
@@ -93,20 +97,20 @@ Design choices to notice:
     (score 3, Tier 3, needs research); non-numeric score → 3; out-of-range → **clamped
     [1,10]**; invalid tier/confidence → safe defaults; malformed outreach → empty draft;
     any `ICPScore` failure → conservative default.
-  - **Layer B — `apply_guards()`** (`analyst.py:184`), pure/sync/deterministic, rules in
-    order: (1) no dated signals → `confidence=low`, `needs_human_research=True`; (2)
-    `confidence==low` & `score>=7` → cap to 6; (3) tier derived from score —
+  - **Layer B — `apply_guards()`** (`duvo/agents/analyst.py:191`), pure/sync/deterministic,
+    rules in order: (1) no dated signals → `confidence=low`, `needs_human_research=True`;
+    (2) `confidence==low` & `score>=7` → cap to 6; (3) tier derived from score —
     `>=8 & not needs_human_research`→Tier 1, `>=5`→Tier 2, else Tier 3 (**overrides the
     model's tier**); (4) `needs_human_research` & Tier 1 → downgrade to Tier 2.
   - Net effect: a hallucinated high score can never *alone* yield a confident Tier 1.
 
-### Router (`router.py`) — the never-send safety layer
+### Router (`duvo/agents/router.py`) — the never-send safety layer
 - `run_agent` with four no-input tools: `crm_upsert`, `slack_alert`, `outreach_queue`,
   `finish`.
 - `confident_t1 = (tier == "Tier 1") and (not needs_human_research)` — computed once,
   deterministically, outside the model.
 - **Tools self-guard:** `crm_upsert` always allowed; `slack_alert`/`outreach_queue` put
-  the safety check *first*, **before the lazy `from writeback import …` and any await** —
+  the safety check *first*, **before the lazy `from duvo.writeback import …` and any await** —
   a non-confident-Tier-1 returns `"refused: not a confident Tier 1 (safety guard)"` and
   the send module is never even imported. Proven by `test_guard_fires_before_lazy_import`
   (deletes the modules from `sys.modules`, asserts they never reappear).
@@ -114,7 +118,7 @@ Design choices to notice:
   campaign (lemlist) for a human rep. `dry_run` returns `[dry-run] …` strings; agents
   still really decide.
 
-## 5. The pluggable write-back layer (`writeback/`)
+## 5. The pluggable write-back layer (`duvo/writeback/`)
 
 Two dispatchers, two adapters each, swap by one env var, all sharing one HTTP pool:
 
@@ -131,10 +135,10 @@ Two dispatchers, two adapters each, swap by one env var, all sharing one HTTP po
   ensure; **Brevo** tries rich attributes then minimal `email + listIds`; **lemlist** posts
   to a paused campaign with `deduplicate=true` and validates the API key before the
   campaign id.
-- Shared client (`http_client.py`): lazy module-level `httpx.AsyncClient` with uniform
-  `HTTP_TIMEOUT_SECONDS`, drained by `aclose()` in `main`'s `finally`.
+- Shared client (`duvo/infra/http_client.py`): lazy module-level `httpx.AsyncClient` with
+  uniform `HTTP_TIMEOUT_SECONDS`, drained by `aclose()` in the orchestrator's `finally`.
 
-## 6. The data contract (`models.py`)
+## 6. The data contract (`duvo/models.py`)
 
 Five Pydantic models are the spine every agent agrees on:
 - `Company` (CSV input).
@@ -148,22 +152,22 @@ Five Pydantic models are the spine every agent agrees on:
 
 ## 7. Cross-cutting infrastructure
 
-- **`config.py`** — centralized env reads; `require(name, value)` raises a clear error for
-  required keys (Exa, Anthropic) but leaves write-back keys lazy so `--dry-run` runs
+- **`duvo/config.py`** — centralized env reads; `require(name, value)` raises a clear error
+  for required keys (Exa, Anthropic) but leaves write-back keys lazy so `--dry-run` runs
   without a full `.env`. Model hardcoded `claude-sonnet-4-6`. All concurrency/timeout
   knobs env-overridable with sane defaults.
-- **`logging_setup.py`** — single `duvo.*` logger tree; idempotent `configure_logging`
+- **`duvo/infra/logging_setup.py`** — single `duvo.*` logger tree; idempotent `configure_logging`
   (no duplicate handlers); `propagate=False`; level resolvable from string with INFO
   fallback; secrets never logged.
-- **`reporter.py`** — the only deliberately **sync** module (pure CPU + file I/O, safe from
-  async); Jinja2 autoescape; sorts accounts by score desc; writes
+- **`duvo/reporting/reporter.py`** — the only deliberately **sync** module (pure CPU + file
+  I/O, safe from async); Jinja2 autoescape; sorts accounts by score desc; writes
   `output/run-report.html`. The template renders per account: tier badge, why-fit,
   linked/dated signals, drafted outreach, the agent tool-call log, and the three
   write-back statuses.
 
 ## 8. Testing philosophy
 
-281 tests, fully offline — Anthropic, Exa, and all HTTP mocked; no keys, no network.
+290 tests, fully offline — Anthropic, Exa, and all HTTP mocked; no keys, no network.
 `asyncio_mode = auto`. `conftest.py` supplies `make_fake_async_client`, `_fake_response`,
 `make_score`. The agent-testing trick: **patch `run_agent` itself** with a fake that calls
 a chosen tool sequence — so router/analyst logic is tested deterministically without
