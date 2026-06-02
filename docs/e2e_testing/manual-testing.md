@@ -4,9 +4,13 @@ This guide describes how to **manually** verify the whole pipeline end-to-end: w
 commands to run, which external services to open and check, what a correct result looks
 like, and roughly how long each run takes.
 
-> Automated tests (`pytest -q`, 281 mocked tests) already cover the code in isolation.
+> Automated tests (`uv run pytest -q`, 281 mocked tests) already cover the code in isolation.
 > This document is about the **live, human-in-the-loop verification** against the real
 > services (Exa, Anthropic, Attio, Slack, Brevo).
+>
+> This project uses **[uv](https://docs.astral.sh/uv/)**. Commands are shown with the
+> `uv run` prefix (no manual venv activation needed). If you prefer, you can
+> `source .venv/bin/activate` once and drop the `uv run` prefix.
 
 ---
 
@@ -14,8 +18,8 @@ like, and roughly how long each run takes.
 
 | Check | How |
 |---|---|
-| Virtual env active | `source .venv/bin/activate` |
-| Dependencies installed | `pip install -r requirements.txt` |
+| uv installed | `uv --version` (install: `curl -LsSf https://astral.sh/uv/install.sh \| sh`) |
+| Environment synced | `uv sync` (creates `.venv` + installs all deps from `uv.lock`) |
 | `.env` exists and is filled | `cp .env.example .env` then edit |
 | Required keys present | `EXA_API_KEY`, `ANTHROPIC_API_KEY` (needed even for `--dry-run`) |
 | CRM ready | `CRM_PROVIDER=attio` + `ATTIO_API_KEY` |
@@ -26,8 +30,8 @@ like, and roughly how long each run takes.
 Quick sanity check that the package imports and tests pass:
 
 ```bash
-python -c "import main; print('import ok')"
-python -m pytest -q          # expect: 281 passed
+uv run python -c "import main; print('import ok')"
+uv run pytest -q          # expect: 281 passed
 ```
 
 > ⚠️ Even `--dry-run` makes **real** Exa + Anthropic calls (only the write-backs are
@@ -59,7 +63,7 @@ Keep these tabs/windows open side-by-side during the test:
 Agents run and **really decide**, but every write-back is simulated. Nothing touches Attio/Slack/Brevo.
 
 ```bash
-python main.py --dry-run --limit 3
+uv run python main.py --dry-run --limit 3
 ```
 
 **Verify:**
@@ -75,7 +79,7 @@ python main.py --dry-run --limit 3
 ### ✅ Scenario B — Dry run, full list
 
 ```bash
-python main.py --dry-run
+uv run python main.py --dry-run
 ```
 
 **Verify:** same as A, but for all 10 accounts. Confirm the two deliberately weak accounts
@@ -91,7 +95,7 @@ flagged **"human research needed"** in the report — this proves `apply_guards(
 This actually writes to Attio (and, for any confident Tier 1, Slack + Brevo).
 
 ```bash
-python main.py --limit 2
+uv run python main.py --limit 2
 ```
 
 **Verify in each service:**
@@ -111,7 +115,7 @@ python main.py --limit 2
 ### ✅ Scenario D — Full real run
 
 ```bash
-python main.py
+uv run python main.py
 ```
 
 **Verify:** all 10 accounts processed; confident Tier-1 accounts trigger `crm_upsert` **+**
@@ -125,7 +129,7 @@ python main.py
 ### ✅ Scenario E — Verbose / debugging
 
 ```bash
-python main.py --dry-run --limit 1 --log-level DEBUG
+uv run python main.py --dry-run --limit 1 --log-level DEBUG
 ```
 
 **Verify:** the terminal shows every agent turn, each tool call with its arguments, and each
@@ -142,7 +146,7 @@ These are the guarantees to confirm explicitly during a **real** run (Scenario C
 - [ ] **Never-send:** no email lands in the `TEST_EMAIL` inbox — leads only appear in the Brevo review list.
 - [ ] **Guarded routing:** non-confident-Tier-1 accounts get only a CRM record (no Slack, no Brevo contact).
 - [ ] **Guard caps confidence:** the two weak demo accounts are Tier 3 + "human research needed".
-- [ ] **Failure isolation:** if one account errors (e.g. a transient API hiccup), the run continues and the report is still generated for the rest. You can simulate pressure with a tiny timeout: `ACCOUNT_TIMEOUT_SECONDS=0.01 python main.py --limit 3` → accounts time out, are logged as failed, and the report still renders (with 0 results) without the process crashing.
+- [ ] **Failure isolation:** if one account errors (e.g. a transient API hiccup), the run continues and the report is still generated for the rest. You can simulate pressure with a tiny timeout: `ACCOUNT_TIMEOUT_SECONDS=0.01 uv run python main.py --limit 3` → accounts time out, are logged as failed, and the report still renders (with 0 results) without the process crashing.
 - [ ] **No secrets in logs:** scan the terminal output — API keys and the Slack webhook URL never appear.
 
 ---
@@ -167,7 +171,7 @@ These are the guarantees to confirm explicitly during a **real** run (Scenario C
 | `--dry-run --limit 3` | 3 | ~1–2 min |
 | `--dry-run` | 10 | ~2–4 min |
 | `--limit 2` (real) | 2 | ~1–2 min |
-| *(full)* `python main.py` | 10 | ~3–6 min |
+| *(full)* `uv run python main.py` | 10 | ~3–6 min |
 | `--limit 1 --log-level DEBUG` | 1 | ~30–60 s |
 
 > Timings vary with Exa/Anthropic latency, how many searches each agent chooses, and your

@@ -4,9 +4,13 @@ Tento návod popisuje, ako **manuálne** overiť celý pipeline od začiatku do 
 príkazy spustiť, ktoré externé služby otvoriť a skontrolovať, ako vyzerá správny výsledok
 a približne ako dlho jednotlivé behy trvajú.
 
-> Automatizované testy (`pytest -q`, 281 mockovaných testov) už pokrývajú kód v izolácii.
+> Automatizované testy (`uv run pytest -q`, 281 mockovaných testov) už pokrývajú kód v izolácii.
 > Tento dokument je o **živom overení s človekom v slučke** (human-in-the-loop) oproti
 > reálnym službám (Exa, Anthropic, Attio, Slack, Brevo).
+>
+> Tento projekt používa **[uv](https://docs.astral.sh/uv/)**. Príkazy sú uvedené s
+> prefixom `uv run` (netreba manuálne aktivovať venv). Ak chceš, môžeš raz spraviť
+> `source .venv/bin/activate` a prefix `uv run` vynechať.
 
 ---
 
@@ -14,8 +18,8 @@ a približne ako dlho jednotlivé behy trvajú.
 
 | Kontrola | Ako |
 |---|---|
-| Aktívne virtuálne prostredie | `source .venv/bin/activate` |
-| Nainštalované závislosti | `pip install -r requirements.txt` |
+| uv nainštalované | `uv --version` (inštalácia: `curl -LsSf https://astral.sh/uv/install.sh \| sh`) |
+| Prostredie zosynchronizované | `uv sync` (vytvorí `.venv` + nainštaluje všetky závislosti z `uv.lock`) |
 | `.env` existuje a je vyplnený | `cp .env.example .env` a uprav |
 | Povinné kľúče sú prítomné | `EXA_API_KEY`, `ANTHROPIC_API_KEY` (potrebné aj pre `--dry-run`) |
 | CRM pripravené | `CRM_PROVIDER=attio` + `ATTIO_API_KEY` |
@@ -26,8 +30,8 @@ a približne ako dlho jednotlivé behy trvajú.
 Rýchla kontrola, že balík sa importuje a testy prechádzajú:
 
 ```bash
-python -c "import main; print('import ok')"
-python -m pytest -q          # očakávané: 281 passed
+uv run python -c "import main; print('import ok')"
+uv run pytest -q          # očakávané: 281 passed
 ```
 
 > ⚠️ Aj `--dry-run` robí **reálne** volania na Exa + Anthropic (simulujú sa len zápisy do
@@ -59,7 +63,7 @@ Počas testu maj tieto okná/karty otvorené vedľa seba:
 Agenti bežia a **naozaj rozhodujú**, ale každý zápis je simulovaný. Nič sa nezapíše do Attia/Slacku/Breva.
 
 ```bash
-python main.py --dry-run --limit 3
+uv run python main.py --dry-run --limit 3
 ```
 
 **Over:**
@@ -75,7 +79,7 @@ python main.py --dry-run --limit 3
 ### ✅ Scenár B — Dry run, celý zoznam
 
 ```bash
-python main.py --dry-run
+uv run python main.py --dry-run
 ```
 
 **Over:** to isté ako A, ale pre všetkých 10 accountov. Skontroluj, že dva zámerne slabé
@@ -92,7 +96,7 @@ funguje.
 Tento beh naozaj zapisuje do Attia (a pri sebavedomom Tier 1 aj do Slacku + Breva).
 
 ```bash
-python main.py --limit 2
+uv run python main.py --limit 2
 ```
 
 **Over v jednotlivých službách:**
@@ -112,7 +116,7 @@ python main.py --limit 2
 ### ✅ Scenár D — Plný reálny beh
 
 ```bash
-python main.py
+uv run python main.py
 ```
 
 **Over:** spracuje sa všetkých 10 accountov; sebavedomé Tier-1 accounty spustia `crm_upsert`
@@ -127,7 +131,7 @@ odmietnutie „refused“).
 ### ✅ Scenár E — Verbose / debugovanie
 
 ```bash
-python main.py --dry-run --limit 1 --log-level DEBUG
+uv run python main.py --dry-run --limit 1 --log-level DEBUG
 ```
 
 **Over:** terminál ukáže každý ťah (turn) agenta, každé volanie nástroja aj s argumentmi a
@@ -145,7 +149,7 @@ Toto sú garancie, ktoré výslovne over počas **reálneho** behu (Scenár C/D)
 - [ ] **Nikdy neodosiela:** do schránky `TEST_EMAIL` nepríde žiadny e-mail — leady sa objavia len v Brevo review liste.
 - [ ] **Strážené routovanie:** non-sebavedomé-Tier-1 accounty dostanú iba CRM záznam (žiadny Slack, žiadny Brevo kontakt).
 - [ ] **Guard limituje istotu:** dva slabé demo accounty sú Tier 3 + „human research needed“.
-- [ ] **Izolácia zlyhania:** ak jeden account zlyhá (napr. dočasný výpadok API), beh pokračuje a report sa aj tak vygeneruje pre zvyšok. Tlak vieš odsimulovať malým timeoutom: `ACCOUNT_TIMEOUT_SECONDS=0.01 python main.py --limit 3` → accounty vypršia, zalogujú sa ako zlyhané a report sa aj tak vykreslí (s 0 výsledkami) bez pádu procesu.
+- [ ] **Izolácia zlyhania:** ak jeden account zlyhá (napr. dočasný výpadok API), beh pokračuje a report sa aj tak vygeneruje pre zvyšok. Tlak vieš odsimulovať malým timeoutom: `ACCOUNT_TIMEOUT_SECONDS=0.01 uv run python main.py --limit 3` → accounty vypršia, zalogujú sa ako zlyhané a report sa aj tak vykreslí (s 0 výsledkami) bez pádu procesu.
 - [ ] **Žiadne tajomstvá v logoch:** prejdi výstup terminálu — API kľúče ani Slack webhook URL sa nikdy neobjavia.
 
 ---
@@ -170,7 +174,7 @@ Toto sú garancie, ktoré výslovne over počas **reálneho** behu (Scenár C/D)
 | `--dry-run --limit 3` | 3 | ~1–2 min |
 | `--dry-run` | 10 | ~2–4 min |
 | `--limit 2` (reálny) | 2 | ~1–2 min |
-| *(plný)* `python main.py` | 10 | ~3–6 min |
+| *(plný)* `uv run python main.py` | 10 | ~3–6 min |
 | `--limit 1 --log-level DEBUG` | 1 | ~30–60 s |
 
 > Časy sa líšia podľa latencie Exa/Anthropic, počtu vyhľadávaní, ktoré si agent zvolí, a podľa
