@@ -72,20 +72,50 @@ One interface, two adapters each — point at Duvo's real stack by flipping a si
 
 ## 🚀 Setup
 
-```bash
-# 1. create + activate a virtual env
-python3.11 -m venv .venv && source .venv/bin/activate
+This project uses **[uv](https://docs.astral.sh/uv/)** — a fast, modern Python package manager.
 
-# 2. install (runtime only)
-pip install -r requirements.txt
-#    …or with the test toolchain
-pip install -r requirements-dev.txt
+```bash
+# 1. install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. sync the environment (creates .venv + installs all dependencies)
+uv sync
 
 # 3. configure secrets
 cp .env.example .env
 ```
 
 Fill `.env` with **Exa**, **Anthropic**, `ATTIO_API_KEY` (keep `CRM_PROVIDER=attio`), the **Slack** webhook, and `BREVO_API_KEY` + `BREVO_LIST_ID` (keep `OUTREACH_PROVIDER=brevo`). See `.env.example` for exact, sourced steps.
+
+### 🛠️ Adding or updating dependencies
+
+```bash
+# Add a production dependency
+uv add 'package-name>=1.0'
+
+# Add a development dependency
+uv add --dev 'pytest-plugin'
+
+# Update lockfile (commits to uv.lock)
+uv lock
+
+# Sync after dependency changes
+uv sync
+```
+
+### 📦 Migration from pip
+
+If you previously used `pip install -r requirements.txt`, here's what changed:
+
+| Old way | New way |
+|---|---|
+| `pip install -r requirements.txt` | `uv sync` |
+| `pip install -r requirements-dev.txt` | `uv sync` (dev deps included) |
+| Manual venv: `python3.11 -m venv .venv` | `uv sync` (automatic) |
+| `pip install package-name` | `uv add package-name` |
+| `pip install --upgrade` | `uv lock --upgrade` |
+
+**TL;DR:** `uv sync` replaces all pip workflows. The old `requirements.txt` files are no longer used; the lockfile is `uv.lock`.
 
 ### ⚙️ Optional env knobs
 
@@ -103,13 +133,15 @@ All have sane defaults:
 
 ## ▶️ Run
 
+Run with `uv run` (dependencies are automatically in scope) or after activating `.venv/bin/activate`:
+
 | Command | What it does |
 |---|---|
-| `python main.py --dry-run` | Agents run and **really decide**; write-back tools simulate (safe demo fallback) |
-| `python main.py --limit 3` | First 3 accounts only (fast live demo) |
-| `python main.py` | Full concurrent loop with write-backs → `output/run-report.html` |
-| `python main.py --concurrency 3` | Override `MAX_CONCURRENT_ACCOUNTS` for this run |
-| `python main.py --log-level DEBUG` | Verbose logs (every turn, tool call, and guard decision) |
+| `uv run python main.py --dry-run` | Agents run and **really decide**; write-back tools simulate (safe demo fallback) |
+| `uv run python main.py --limit 3` | First 3 accounts only (fast live demo) |
+| `uv run python main.py` | Full concurrent loop with write-backs → `output/run-report.html` |
+| `uv run python main.py --concurrency 3` | Override `MAX_CONCURRENT_ACCOUNTS` for this run |
+| `uv run python main.py --log-level DEBUG` | Verbose logs (every turn, tool call, and guard decision) |
 
 > ⚠️ **Note:** even `--dry-run` makes **real** Exa + Anthropic calls (only the write-backs are simulated), so it needs valid `EXA_API_KEY` and `ANTHROPIC_API_KEY`.
 
@@ -138,7 +170,11 @@ Every module logs through a single `duvo.*` logger tree configured by `logging_s
 Built test-first and runs **fully offline** — every external dependency (Anthropic, Exa, and all HTTP write-backs) is mocked, so the suite needs no API keys and makes no network calls.
 
 ```bash
-python -m pytest -q          # 281 tests, ~1s
+# Run tests with uv
+uv run pytest -q          # 281 tests, ~1s
+
+# Or activate the venv first, then run pytest directly
+source .venv/bin/activate && pytest -q
 ```
 
 Coverage includes:
