@@ -9,6 +9,12 @@ from logging_setup import get_logger
 
 _log = get_logger(__name__)
 
+# The analyst's record_assessment payload is large (why_fit/why_not arrays, reasoning,
+# plus the full nested outreach draft). The default 2000-token cap can truncate the
+# outreach object mid-JSON, yielding an empty/malformed draft that falls back to blank.
+# Give the analyst headroom so the draft completes.
+ANALYST_MAX_TOKENS = 4096
+
 ICP_DEFINITION = """Duvo AI closes operational back-office work end-to-end for enterprise retail
 and CPG. Ideal customer:
 - Industry: retail, grocery, CPG, e-commerce, pharmacy retail.
@@ -112,7 +118,8 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
     # record_assessment is sync — run_agent calls it directly.
     impls = {"exa_search": exa_search, "record_assessment": record_assessment}
     await run_agent(system, user, [EXA_SEARCH_TOOL, RECORD_TOOL], impls,
-                    max_turns=MAX_ANALYST_SEARCHES + 3, final_tools={"record_assessment"}, log=log)
+                    max_turns=MAX_ANALYST_SEARCHES + 3, final_tools={"record_assessment"}, log=log,
+                    max_tokens=ANALYST_MAX_TOKENS)
 
     if not captured:  # agent never produced an assessment — conservative default
         _log.warning(

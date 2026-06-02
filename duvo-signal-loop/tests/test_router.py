@@ -61,6 +61,37 @@ import router  # noqa: E402 — must be after helpers
 # Test: _tool_schema shape
 # ---------------------------------------------------------------------------
 
+class TestLeadEmailFor:
+    """lead_email_for derives a unique per-account plus-addressed email (sync, pure)."""
+
+    def test_basic_plus_addressing(self):
+        assert router.lead_email_for("jakub@gmail.com", "rohlik.cz") == "jakub+rohlik-cz@gmail.com"
+
+    def test_domain_dots_become_hyphens(self):
+        assert router.lead_email_for("rep@example.com", "itesco.cz") == "rep+itesco-cz@example.com"
+
+    def test_uppercase_domain_normalised(self):
+        assert router.lead_email_for("jakub@gmail.com", "DrMax.CZ") == "jakub+drmax-cz@gmail.com"
+
+    def test_distinct_domains_give_distinct_emails(self):
+        a = router.lead_email_for("x@y.com", "rohlik.cz")
+        b = router.lead_email_for("x@y.com", "notino.cz")
+        assert a != b
+
+    def test_existing_plus_tag_replaced_not_stacked(self):
+        # base already has a +tag — replace it so the result still routes to the inbox
+        assert router.lead_email_for("jakub+old@gmail.com", "albert.cz") == "jakub+albert-cz@gmail.com"
+
+    def test_no_at_sign_returns_unchanged(self):
+        assert router.lead_email_for("not-an-email", "rohlik.cz") == "not-an-email"
+
+    def test_empty_domain_returns_base_unchanged(self):
+        assert router.lead_email_for("jakub@gmail.com", "") == "jakub@gmail.com"
+
+    def test_domain_with_only_symbols_returns_base_unchanged(self):
+        assert router.lead_email_for("jakub@gmail.com", "...") == "jakub@gmail.com"
+
+
 class TestToolSchema:
     """_tool_schema returns correctly-shaped dicts."""
 
@@ -311,17 +342,50 @@ class TestRealMode:
         assert rr.slack_status == sentinel
 
     async def test_outreach_real_mode_confident_t1_calls_adapter(self):
-        """In real mode, confident Tier-1 outreach_queue awaits outreach.queue_lead."""
+        """In real mode, confident Tier-1 outreach_queue awaits outreach.queue_lead
+        with a per-account plus-addressed email derived from the base test_email."""
         sentinel = "brevo contact enrolled"
         rr = _make_run_result(tier="Tier 1", needs_human_research=False)
         test_email = "rep@example.com"
+        expected_email = router.lead_email_for(test_email, rr.score.domain)
 
         with patch("router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
              patch("writeback.outreach.queue_lead", AsyncMock(return_value=sentinel)) as mock_queue:
             await router.run_router(rr, dry_run=False, test_email=test_email)
 
-        mock_queue.assert_awaited_once_with(rr.score, test_email)
+        mock_queue.assert_awaited_once_with(rr.score, expected_email)
         assert rr.outreach_status == sentinel
+
+    async def test_two_accounts_get_distinct_lead_emails(self):
+        """Two accounts with different domains queue under different (unique) emails,
+        so the outreach tool stores them as distinct contacts instead of collapsing."""
+        rr1 = _make_run_result(tier="Tier 1", needs_human_research=False, domain="rohlik.cz")
+        rr2 = _make_run_result(tier="Tier 1", needs_human_research=False, domain="notino.cz")
+
+        mock_queue = AsyncMock(return_value="ok")
+        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
+             patch("writeback.outreach.queue_lead", mock_queue):
+            await router.run_router(rr1, dry_run=False, test_email="base@gmail.com")
+            await router.run_router(rr2, dry_run=False, test_email="base@gmail.com")
+
+        emails = [c.args[1] for c in mock_queue.call_args_list]
+        assert emails == ["base+rohlik-cz@gmail.com", "base+notino-cz@gmail.com"]
+        assert emails[0] != emails[1]
+
+    async def test_outreach_real_mode_failure_recorded_as_failed_not_skipped(self):
+        """If the outreach adapter raises in real mode, the status is recorded as
+        'failed: ...' (honest) rather than left as the default 'skipped', and the
+        run does not crash."""
+        rr = _make_run_result(tier="Tier 1", needs_human_research=False)
+
+        boom = AsyncMock(side_effect=RuntimeError("401 Unauthorized"))
+        with patch("router.run_agent", side_effect=_fake_run_agent_factory(["outreach_queue"])), \
+             patch("writeback.outreach.queue_lead", boom):
+            # Must not raise out of run_router.
+            await router.run_router(rr, dry_run=False)
+
+        assert rr.outreach_status.startswith("failed:")
+        assert "401 Unauthorized" in rr.outreach_status
 
 
 # ---------------------------------------------------------------------------

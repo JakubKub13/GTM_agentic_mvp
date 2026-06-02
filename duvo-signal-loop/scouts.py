@@ -80,7 +80,10 @@ async def run_scout(
             f"Context: {company.description}")
     captured: dict = {"signals": []}
 
-    def submit_signals(signals):
+    def submit_signals(signals=None):
+        # The model sometimes calls submit_signals() with no args to mean "found nothing".
+        # Tolerate that (and a null) instead of raising, so the beat returns [] cleanly.
+        signals = signals or []
         captured["signals"] = signals
         return f"received {len(signals)} signals"
 

@@ -55,7 +55,8 @@ def _make_fake_run_agent(assessment_kwargs=None):
     The fake must be an async function because run_analyst does:
         await run_agent(...)
     """
-    async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+    async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(),
+                             log=None, max_tokens=2000):
         if assessment_kwargs is not None:
             impls["record_assessment"](**assessment_kwargs)
         return []
@@ -105,6 +106,31 @@ class TestRunAnalystNormalPath:
         # After guards: score=8 >=8, not needs_human_research → Tier 1
         assert result.tier == "Tier 1"
         assert result.score == 8
+
+
+# ---------------------------------------------------------------------------
+# TestRunAnalystMaxTokens — the analyst asks for a larger output budget so the
+# big record_assessment payload (assessment + outreach draft) isn't truncated.
+# ---------------------------------------------------------------------------
+
+class TestRunAnalystMaxTokens:
+    """run_analyst passes a max_tokens above the run_agent default (2000)."""
+
+    async def test_passes_max_tokens_above_default(self):
+        company = _make_company()
+        signals = [_make_signal()]
+        captured = {}
+
+        async def capturing_run_agent(system, user, tools, impls, max_turns=8,
+                                      final_tools=(), log=None, max_tokens=2000):
+            captured["max_tokens"] = max_tokens
+            impls["record_assessment"](**VALID_ASSESSMENT)
+            return []
+
+        with patch("analyst.run_agent", side_effect=capturing_run_agent):
+            await run_analyst(company, signals)
+
+        assert captured["max_tokens"] > 2000
 
 
 # ---------------------------------------------------------------------------

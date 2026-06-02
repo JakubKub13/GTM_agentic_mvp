@@ -1,5 +1,6 @@
 """Router agent: decides how to action a scored account; its tools are the write-backs."""
 import json
+import re
 
 import config
 from models import RunResult
@@ -8,6 +9,41 @@ from logging_setup import get_logger
 from writeback import crm
 
 _log = get_logger(__name__)
+
+
+def lead_email_for(base_email: str, domain: str) -> str:
+    """Derive a per-account lead email via plus-addressing.
+
+    The demo uses one real inbox for every lead, but queueing them all under the
+    same address makes the outreach tool collapse them into a single contact
+    (last write wins). Plus-addressing gives each account a unique address that
+    still delivers to the same inbox, so each lead becomes a distinct contact.
+
+    Example::
+
+        lead_email_for("jakub@gmail.com", "rohlik.cz") -> "jakub+rohlik-cz@gmail.com"
+
+    The account *domain* is sanitised to ``[a-z0-9]`` runs joined by hyphens to
+    form the tag. Any existing ``+tag`` on the base address is replaced (not
+    stacked) so the result still routes to the real inbox. If *base_email* has no
+    ``@``, or *domain* yields an empty tag, *base_email* is returned unchanged.
+
+    Args:
+        base_email: The real inbox address (e.g. ``config.TEST_EMAIL``).
+        domain:     The account domain used to make the address unique.
+
+    Returns:
+        A plus-addressed email unique to *domain*, or *base_email* unchanged when
+        it cannot be derived safely.
+    """
+    if "@" not in base_email:
+        return base_email
+    tag = re.sub(r"[^a-z0-9]+", "-", domain.lower()).strip("-")
+    if not tag:
+        return base_email
+    local, _, host = base_email.partition("@")
+    base_local = local.split("+", 1)[0]  # drop any existing +tag so we don't stack
+    return f"{base_local}+{tag}@{host}"
 
 ROUTER_SYSTEM = (
     "You are Duvo's GTM routing agent. You decide how to action one scored account into the "
@@ -115,7 +151,16 @@ async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST
             rr.outreach_status = status
         else:
             from writeback import outreach  # lazy — module added in a later group
-            status = await outreach.queue_lead(s, test_email)
+            # Per-account plus-addressing so each lead is a distinct contact in the
+            # outreach tool (all still delivering to the one real inbox).
+            lead_email = lead_email_for(test_email, s.domain)
+            try:
+                status = await outreach.queue_lead(s, lead_email)
+            except Exception as exc:
+                # Record the failure honestly instead of leaving status as "skipped"
+                # (which reads as "not attempted"). The run still continues.
+                status = f"failed: {exc}"
+                _log.warning("outreach_queue failed for %s: %s", s.company_name, exc)
             rr.outreach_status = status
         _log.info("outreach_queue result: %s", status)
         return status

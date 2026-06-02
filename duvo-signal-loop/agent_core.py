@@ -37,6 +37,7 @@ async def run_agent(
     max_turns: int = 8,
     final_tools: Iterable[str] = (),
     log: list[str] | None = None,
+    max_tokens: int = 2000,
 ) -> list:
     """Drive a tool-using Anthropic agent to completion (async).
 
@@ -57,6 +58,10 @@ async def run_agent(
         final_tools: Iterable of tool names that, when called, terminate the loop.
         log:         Optional list; each tool call appends a short entry for the
                      audit report (e.g. ``"tool_name(arg=val, ...)``).
+        max_tokens:  Max output tokens per model call (default 2000). Agents that
+                     emit large final tool payloads (e.g. the analyst's full
+                     assessment + outreach draft) should raise this so the tool
+                     call is not truncated mid-JSON.
 
     Returns:
         The full messages list (conversation transcript).
@@ -69,7 +74,7 @@ async def run_agent(
 
         resp = await _get_client().messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=2000,
+            max_tokens=max_tokens,
             system=system,
             tools=tools,
             messages=messages,

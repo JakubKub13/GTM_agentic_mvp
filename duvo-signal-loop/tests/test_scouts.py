@@ -120,6 +120,34 @@ class TestRunScout:
             signals = await run_scout(company, "erp_migration", "ERP desc")
         assert signals == []
 
+    async def test_submit_signals_called_with_no_args_returns_empty_list(self):
+        """The model may call submit_signals() with no args to mean 'found nothing'.
+
+        This must NOT raise (it previously crashed with a missing-arg TypeError and
+        lost the beat). run_scout should treat it as zero signals.
+        """
+        async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            # Call with no signals argument at all — must be tolerated.
+            result = impls["submit_signals"]()
+            assert "0 signals" in result
+            return []
+
+        company = _make_company()
+        with patch("scouts.run_agent", side_effect=fake_run_agent):
+            signals = await run_scout(company, "hiring", "hiring desc")
+        assert signals == []
+
+    async def test_submit_signals_called_with_none_returns_empty_list(self):
+        """submit_signals(signals=None) is tolerated as zero signals."""
+        async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
+            impls["submit_signals"](signals=None)
+            return []
+
+        company = _make_company()
+        with patch("scouts.run_agent", side_effect=fake_run_agent):
+            signals = await run_scout(company, "pain", "pain desc")
+        assert signals == []
+
     async def test_multiple_signals_returned(self):
         sigs = [SAMPLE_SIGNAL_DICT, {**SAMPLE_SIGNAL_DICT, "title": "Another Signal"}]
         company = _make_company()
