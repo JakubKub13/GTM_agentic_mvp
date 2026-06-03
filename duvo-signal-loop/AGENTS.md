@@ -75,8 +75,8 @@ Every agent is the same runtime with a different prompt + toolset. Copy the shap
 
 ## The runtime
 
-- Drive the agent with `await run_agent(system, user, tools, impls, max_turns=…, final_tools={…}, log=…, max_tokens=…)`. Nothing in `agents/` calls the Anthropic client directly — only `agent_core` does.
-- **Tools** are Anthropic schema **dicts**; **`impls`** maps tool name → callable (sync or async — `run_agent` auto-awaits awaitables). Reuse `EXA_SEARCH_TOOL` / `exa_search` from `tools/exa_tool.py` for search.
+- Drive the agent with `await run_agent(system, user, tools, impls, max_turns=…, final_tools={…}, log=…, max_tokens=…)`. Nothing in `agents/` calls an LLM provider directly — only `agent_core` does, and it speaks the neutral types in `duvo/llm/base.py` (never a wire format).
+- **Tools** are `ToolSpec` objects built with `tool_schema(name, description, parameters)` from `duvo.llm.base` (provider-neutral; the provider translates them to wire format). **`impls`** maps tool name → callable (sync or async — `run_agent` auto-awaits awaitables). Reuse `EXA_SEARCH_TOOL` / `exa_search` from `tools/exa_tool.py` for search.
 - Name the terminating tool(s) in `final_tools` (e.g. `submit_signals`, `record_assessment`, `finish`). Capture its payload into a closure dict and read it back after the loop returns — the loop returns the transcript, not the result.
 - Set `max_tokens` high enough for large terminal payloads (see `analyst.ANALYST_MAX_TOKENS = 4096`) so the final tool JSON isn't truncated.
 - Pass the shared `log` list through so tool calls land in the audit report.
