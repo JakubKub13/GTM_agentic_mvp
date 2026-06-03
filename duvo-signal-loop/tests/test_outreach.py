@@ -1,4 +1,5 @@
 """Tests for writeback/outreach.py — dispatcher routing by OUTREACH_PROVIDER (async)."""
+
 import logging
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
@@ -35,12 +36,14 @@ def _capture_duvo_logs(level: int = logging.WARNING):
 # queue_lead — brevo branch
 # ---------------------------------------------------------------------------
 
+
 class TestQueueLeadBrevo:
     async def test_calls_brevo_queue_lead_when_provider_is_brevo(self, monkeypatch):
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "brevo")
         stub_result = "contact queued in Brevo review list 42 (not sent — rep reviews & sends)"
+        mock_brevo = AsyncMock(return_value=stub_result)
 
-        with patch("duvo.writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)) as mock_brevo:
+        with patch.dict("duvo.writeback.registry._OUTREACH", {"brevo": mock_brevo}):
             result = await outreach.queue_lead(make_score(), "test@example.com")
 
         mock_brevo.assert_called_once()
@@ -49,8 +52,9 @@ class TestQueueLeadBrevo:
     async def test_brevo_receives_score_and_email(self, monkeypatch):
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "brevo")
         score = make_score(company_name="TestCo")
+        mock_brevo = AsyncMock(return_value="ok")
 
-        with patch("duvo.writeback.brevo.queue_lead", AsyncMock(return_value="ok")) as mock_brevo:
+        with patch.dict("duvo.writeback.registry._OUTREACH", {"brevo": mock_brevo}):
             await outreach.queue_lead(score, "rep@test.com")
 
         args = mock_brevo.call_args[0]
@@ -62,12 +66,14 @@ class TestQueueLeadBrevo:
 # queue_lead — lemlist branch
 # ---------------------------------------------------------------------------
 
+
 class TestQueueLeadLemlist:
     async def test_calls_lemlist_queue_lead_when_provider_is_lemlist(self, monkeypatch):
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "lemlist")
         stub_result = "lead queued in paused lemlist campaign cam_abc (awaiting rep approval)"
+        mock_lemlist = AsyncMock(return_value=stub_result)
 
-        with patch("duvo.writeback.lemlist.queue_lead", AsyncMock(return_value=stub_result)) as mock_lemlist:
+        with patch.dict("duvo.writeback.registry._OUTREACH", {"lemlist": mock_lemlist}):
             result = await outreach.queue_lead(make_score(), "test@example.com")
 
         mock_lemlist.assert_called_once()
@@ -76,8 +82,9 @@ class TestQueueLeadLemlist:
     async def test_lemlist_receives_score_and_email(self, monkeypatch):
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "lemlist")
         score = make_score(company_name="LemCo")
+        mock_lemlist = AsyncMock(return_value="ok")
 
-        with patch("duvo.writeback.lemlist.queue_lead", AsyncMock(return_value="ok")) as mock_lemlist:
+        with patch.dict("duvo.writeback.registry._OUTREACH", {"lemlist": mock_lemlist}):
             await outreach.queue_lead(score, "lem@test.com")
 
         args = mock_lemlist.call_args[0]
@@ -89,40 +96,41 @@ class TestQueueLeadLemlist:
 # queue_lead — unknown provider falls back to brevo with a warning
 # ---------------------------------------------------------------------------
 
+
 class TestQueueLeadUnknownProvider:
     async def test_unknown_provider_falls_back_to_brevo(self, monkeypatch):
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "mailchimp")
         stub_result = "contact queued in Brevo review list 42 (not sent — rep reviews & sends)"
+        mock_brevo = AsyncMock(return_value=stub_result)
 
         with _capture_duvo_logs(logging.WARNING) as records:
-            with patch("duvo.writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)) as mock_brevo:
+            with patch.dict("duvo.writeback.registry._OUTREACH", {"brevo": mock_brevo}):
                 result = await outreach.queue_lead(make_score(), "test@example.com")
 
         mock_brevo.assert_called_once()
         assert result == stub_result
         assert any(
-            "unknown OUTREACH_PROVIDER" in r.getMessage() and "mailchimp" in r.getMessage()
+            "unknown write-back provider" in r.getMessage() and "mailchimp" in r.getMessage()
             for r in records
-        ), "Expected a warning about unknown OUTREACH_PROVIDER=mailchimp"
+        ), "Expected a warning about unknown provider 'mailchimp'"
 
     async def test_brevo_provider_does_not_warn(self, monkeypatch):
         monkeypatch.setattr(config, "OUTREACH_PROVIDER", "brevo")
         stub_result = "contact queued in Brevo review list 42 (not sent — rep reviews & sends)"
+        mock_brevo = AsyncMock(return_value=stub_result)
 
         with _capture_duvo_logs(logging.WARNING) as records:
-            with patch("duvo.writeback.brevo.queue_lead", AsyncMock(return_value=stub_result)):
+            with patch.dict("duvo.writeback.registry._OUTREACH", {"brevo": mock_brevo}):
                 await outreach.queue_lead(make_score(), "test@example.com")
 
-        unknown_warns = [
-            r for r in records
-            if "unknown OUTREACH_PROVIDER" in r.getMessage()
-        ]
+        unknown_warns = [r for r in records if "unknown write-back provider" in r.getMessage()]
         assert not unknown_warns, "No unknown-provider warning should fire for provider='brevo'"
 
 
 # ---------------------------------------------------------------------------
 # Lazy imports — no keys needed to import the dispatcher itself
 # ---------------------------------------------------------------------------
+
 
 class TestLazyImports:
     def test_outreach_module_imports_without_env_keys(self):

@@ -1,4 +1,5 @@
 """Tests for writeback/hubspot.py — HubSpot CRM adapter (async httpx)."""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -12,6 +13,7 @@ from tests.conftest import make_score as _make_score
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def make_score(needs_human_research: bool = False) -> ICPScore:
     """HubSpot-specific defaults wrapping the shared make_score factory."""
@@ -35,6 +37,7 @@ def make_score(needs_human_research: bool = False) -> ICPScore:
 # ---------------------------------------------------------------------------
 # _note_body
 # ---------------------------------------------------------------------------
+
 
 class TestNoteBody:
     def test_uses_br_separator(self):
@@ -78,6 +81,7 @@ class TestNoteBody:
 # ensure_icp_property
 # ---------------------------------------------------------------------------
 
+
 class TestEnsureIcpProperty:
     async def test_does_not_post_when_property_exists(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
@@ -113,6 +117,7 @@ class TestEnsureIcpProperty:
 # ---------------------------------------------------------------------------
 # _upsert_company
 # ---------------------------------------------------------------------------
+
 
 class TestUpsertCompany:
     async def test_patches_existing_company_when_found(self, monkeypatch):
@@ -183,6 +188,7 @@ class TestUpsertCompany:
     async def test_create_post_raises_on_non_2xx(self, monkeypatch):
         """Non-2xx on the company-creation POST must propagate (raise_for_status is called)."""
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
+        monkeypatch.setattr(config, "HTTP_MAX_RETRIES", 1)
         search_resp = _fake_response(200, {"results": []})
         error_resp = _fake_response(500, raise_on_raise=True)
 
@@ -199,10 +205,12 @@ class TestUpsertCompany:
 # _create_note — raise_for_status
 # ---------------------------------------------------------------------------
 
+
 class TestCreateNote:
     async def test_note_post_raises_on_non_2xx(self, monkeypatch):
         """Non-2xx on the notes POST must propagate (raise_for_status is called)."""
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
+        monkeypatch.setattr(config, "HTTP_MAX_RETRIES", 1)
         error_resp = _fake_response(503, raise_on_raise=True)
 
         client = make_fake_async_client(post=AsyncMock(return_value=error_resp))
@@ -216,12 +224,13 @@ class TestCreateNote:
 # upsert_account (full chain)
 # ---------------------------------------------------------------------------
 
+
 class TestUpsertAccount:
     async def test_returns_string_with_company_id_and_score(self, monkeypatch):
         monkeypatch.setattr(config, "HUBSPOT_TOKEN", "tok")
         company_id = "hs_chain_001"
 
-        get_resp = _fake_response(200)           # ensure_icp_property GET → exists
+        get_resp = _fake_response(200)  # ensure_icp_property GET → exists
         search_resp = _fake_response(200, {"results": []})
         create_resp = _fake_response(201, {"id": company_id})
         note_resp = _fake_response(201, {"id": "note_001"})

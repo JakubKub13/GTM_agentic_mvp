@@ -1,11 +1,13 @@
 """HubSpot adapter: custom property + upsert company + evidence note. Same interface as attio."""
+
 import time
 
 from duvo import config
 from duvo.config import require
-from duvo.infra import http_client
+from duvo.infra import http_client, retry
 from duvo.infra.logging_setup import get_logger
 from duvo.models import ICPScore
+from duvo.writeback.registry import register_crm
 
 log = get_logger(__name__)
 
@@ -34,21 +36,27 @@ async def ensure_icp_property() -> None:
     """
     url = f"{_BASE}/crm/v3/properties/companies/icp_score"
     log.debug("HubSpot: checking whether icp_score property exists")
-    resp = await _get_client().get(url, headers=_headers())
+    resp = await retry.with_retries(
+        lambda: _get_client().get(url, headers=_headers()),
+        max_attempts=config.HTTP_MAX_RETRIES,
+    )
     if resp.status_code == 200:
         log.debug("HubSpot: icp_score property already exists — skipping creation")
         return
     log.info("HubSpot: creating icp_score custom property on companies")
-    resp2 = await _get_client().post(
-        f"{_BASE}/crm/v3/properties/companies",
-        headers=_headers(),
-        json={
-            "name": "icp_score",
-            "label": "ICP Score",
-            "type": "number",
-            "fieldType": "number",
-            "groupName": "companyinformation",
-        },
+    resp2 = await retry.with_retries(
+        lambda: _get_client().post(
+            f"{_BASE}/crm/v3/properties/companies",
+            headers=_headers(),
+            json={
+                "name": "icp_score",
+                "label": "ICP Score",
+                "type": "number",
+                "fieldType": "number",
+                "groupName": "companyinformation",
+            },
+        ),
+        max_attempts=config.HTTP_MAX_RETRIES,
     )
     resp2.raise_for_status()
 
@@ -63,18 +71,15 @@ async def _upsert_company(score: ICPScore) -> str:
 
     search = {
         "filterGroups": [
-            {
-                "filters": [
-                    {"propertyName": "domain", "operator": "EQ", "value": score.domain}
-                ]
-            }
+            {"filters": [{"propertyName": "domain", "operator": "EQ", "value": score.domain}]}
         ],
         "properties": ["domain", "name"],
     }
-    r = await _get_client().post(
-        f"{_BASE}/crm/v3/objects/companies/search",
-        headers=_headers(),
-        json=search,
+    r = await retry.with_retries(
+        lambda: _get_client().post(
+            f"{_BASE}/crm/v3/objects/companies/search", headers=_headers(), json=search
+        ),
+        max_attempts=config.HTTP_MAX_RETRIES,
     )
     r.raise_for_status()
     results = r.json().get("results", [])
@@ -87,18 +92,22 @@ async def _upsert_company(score: ICPScore) -> str:
     if results:
         cid: str = results[0]["id"]
         log.info("HubSpot: company found (id=%s) — PATCHing properties", cid)
-        pr = await _get_client().patch(
-            f"{_BASE}/crm/v3/objects/companies/{cid}",
-            headers=_headers(),
-            json={"properties": props},
+        pr = await retry.with_retries(
+            lambda: _get_client().patch(
+                f"{_BASE}/crm/v3/objects/companies/{cid}",
+                headers=_headers(),
+                json={"properties": props},
+            ),
+            max_attempts=config.HTTP_MAX_RETRIES,
         )
         pr.raise_for_status()
     else:
         log.info("HubSpot: company not found — creating new record for '%s'", score.company_name)
-        cr = await _get_client().post(
-            f"{_BASE}/crm/v3/objects/companies",
-            headers=_headers(),
-            json={"properties": props},
+        cr = await retry.with_retries(
+            lambda: _get_client().post(
+                f"{_BASE}/crm/v3/objects/companies", headers=_headers(), json={"properties": props}
+            ),
+            max_attempts=config.HTTP_MAX_RETRIES,
         )
         cr.raise_for_status()
         cid = cr.json()["id"]
@@ -147,11 +156,17 @@ async def _create_note(score: ICPScore, company_id: str) -> None:
             }
         ],
     }
-    resp = await _get_client().post(f"{_BASE}/crm/v3/objects/notes", headers=_headers(), json=payload)
+    resp = await retry.with_retries(
+        lambda: _get_client().post(
+            f"{_BASE}/crm/v3/objects/notes", headers=_headers(), json=payload
+        ),
+        max_attempts=config.HTTP_MAX_RETRIES,
+    )
     resp.raise_for_status()
     log.info("HubSpot: evidence note created for company id=%s", company_id)
 
 
+@register_crm("hubspot")
 async def upsert_account(score: ICPScore) -> str:
     """Ensure icp_score property exists, upsert the company, then attach a note.
 

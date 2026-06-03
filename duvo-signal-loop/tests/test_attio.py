@@ -1,4 +1,5 @@
 """Tests for writeback/attio.py — Attio CRM adapter (async httpx)."""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from tests.conftest import _fake_response, make_fake_async_client, make_score
 # ---------------------------------------------------------------------------
 # _note_body
 # ---------------------------------------------------------------------------
+
 
 class TestNoteBody:
     def test_contains_ai_suggested(self):
@@ -58,6 +60,7 @@ class TestNoteBody:
 # _headers
 # ---------------------------------------------------------------------------
 
+
 class TestHeaders:
     def test_raises_when_api_key_missing(self, monkeypatch):
         monkeypatch.setattr(config, "ATTIO_API_KEY", "")
@@ -74,6 +77,7 @@ class TestHeaders:
 # ---------------------------------------------------------------------------
 # _create_company
 # ---------------------------------------------------------------------------
+
 
 class TestCreateCompany:
     async def test_posts_to_records_url_and_returns_record_id(self, monkeypatch):
@@ -113,6 +117,7 @@ class TestCreateCompany:
 
     async def test_raises_when_both_attempts_fail(self, monkeypatch):
         monkeypatch.setattr(config, "ATTIO_API_KEY", "key")
+        monkeypatch.setattr(config, "HTTP_MAX_RETRIES", 1)
 
         fail_resp = _fake_response(500, raise_on_raise=True)
         client = make_fake_async_client(post=AsyncMock(return_value=fail_resp))
@@ -125,6 +130,7 @@ class TestCreateCompany:
 # ---------------------------------------------------------------------------
 # _create_note
 # ---------------------------------------------------------------------------
+
 
 class TestCreateNote:
     async def test_posts_to_notes_url(self, monkeypatch):
@@ -165,6 +171,7 @@ class TestCreateNote:
 # upsert_account (integration of company + note)
 # ---------------------------------------------------------------------------
 
+
 class TestUpsertAccount:
     async def test_returns_string_with_attio_company_record_id_and_score(self, monkeypatch):
         monkeypatch.setattr(config, "ATTIO_API_KEY", "key")
@@ -197,3 +204,30 @@ class TestUpsertAccount:
         second_url = client.post.call_args_list[1][0][0]
         assert "/records" in first_url
         assert "/notes" in second_url
+
+
+async def test_create_company_retries_on_transient_503(monkeypatch):
+    from unittest.mock import AsyncMock, patch
+
+    from duvo import config
+    from duvo.writeback import attio
+    from tests.conftest import _fake_response, make_fake_async_client, make_score
+
+    monkeypatch.setattr(config, "ATTIO_API_KEY", "key")
+    monkeypatch.setattr(config, "HTTP_MAX_RETRIES", 3)
+    # First call 503 (retryable), second call success with a record id, third = note.
+    post = AsyncMock(
+        side_effect=[
+            _fake_response(503),
+            _fake_response(201, {"data": {"id": {"record_id": "rec_1"}}}),
+            _fake_response(201, {"data": {"id": "note_1"}}),
+        ]
+    )
+    client = make_fake_async_client(post=post)
+    with (
+        patch("duvo.infra.http_client.get_client", return_value=client),
+        patch("duvo.infra.retry.asyncio.sleep", AsyncMock()),
+    ):
+        result = await attio.upsert_account(make_score())
+    assert "rec_1" in result
+    assert post.call_count == 3  # 503 retry + success + note

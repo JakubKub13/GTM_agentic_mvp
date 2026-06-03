@@ -1,10 +1,12 @@
 """Analyst agent: validate signals (with its own verification searches), score, draft outreach."""
+
 import json
 
 from duvo.agent_core import run_agent
 from duvo.agents.agent_prompts import load_prompt
 from duvo.config import MAX_ANALYST_SEARCHES
 from duvo.infra.logging_setup import get_logger
+from duvo.llm.base import tool_schema
 from duvo.models import Company, ICPScore, OutreachDraft, Signal
 from duvo.tools.exa_tool import EXA_SEARCH_TOOL, exa_search
 
@@ -16,10 +18,10 @@ _log = get_logger(__name__)
 # Give the analyst headroom so the draft completes.
 ANALYST_MAX_TOKENS = 4096
 
-RECORD_TOOL = {
-    "name": "record_assessment",
-    "description": "Record the final ICP assessment and drafted outreach. Call once when done.",
-    "input_schema": {
+RECORD_TOOL = tool_schema(
+    "record_assessment",
+    "Record the final ICP assessment and drafted outreach. Call once when done.",
+    {
         "type": "object",
         "properties": {
             "score": {"type": "integer"},
@@ -36,17 +38,29 @@ RECORD_TOOL = {
                 "properties": {
                     "persona": {"type": "string"},
                     "subject": {"type": "string"},
-                    "first_line": {"type": "string", "description": "Personalized opener grounded in a real signal."},
+                    "first_line": {
+                        "type": "string",
+                        "description": "Personalized opener grounded in a real signal.",
+                    },
                     "body": {"type": "string"},
                 },
                 "required": ["persona", "subject", "first_line", "body"],
             },
         },
-        "required": ["score", "tier", "confidence", "why_fit", "why_not",
-                     "recommended_persona", "recommended_angle", "reasoning",
-                     "needs_human_research", "outreach"],
+        "required": [
+            "score",
+            "tier",
+            "confidence",
+            "why_fit",
+            "why_not",
+            "recommended_persona",
+            "recommended_angle",
+            "reasoning",
+            "needs_human_research",
+            "outreach",
+        ],
     },
-}
+)
 
 _VALID_TIERS = {"Tier 1", "Tier 2", "Tier 3"}
 _VALID_CONFIDENCES = {"high", "medium", "low"}
@@ -55,11 +69,20 @@ _VALID_CONFIDENCES = {"high", "medium", "low"}
 def _conservative_default(company: Company) -> ICPScore:
     """Return a conservative-default ICPScore for a company when the agent produces nothing usable."""
     return ICPScore(
-        company_name=company.name, domain=company.domain, score=3, tier="Tier 3",
-        confidence="low", why_fit=[], why_not=["No usable signals / analyst produced nothing."],
-        recommended_persona="Supply Chain / Finance leadership", recommended_angle="",
-        reasoning="Insufficient evidence.", needs_human_research=True,
-        outreach=OutreachDraft(persona="Supply Chain leadership", subject="", first_line="", body=""),
+        company_name=company.name,
+        domain=company.domain,
+        score=3,
+        tier="Tier 3",
+        confidence="low",
+        why_fit=[],
+        why_not=["No usable signals / analyst produced nothing."],
+        recommended_persona="Supply Chain / Finance leadership",
+        recommended_angle="",
+        reasoning="Insufficient evidence.",
+        needs_human_research=True,
+        outreach=OutreachDraft(
+            persona="Supply Chain leadership", subject="", first_line="", body=""
+        ),
     )
 
 
@@ -86,8 +109,10 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
 
     signals_json = json.dumps([s.model_dump() for s in signals], ensure_ascii=False, indent=2)
     system = load_prompt("analyst", max_analyst_searches=MAX_ANALYST_SEARCHES)
-    user = (f"Company: {company.name} ({company.domain}, {company.country}). "
-            f"Context: {company.description}\n\nSignals:\n{signals_json}")
+    user = (
+        f"Company: {company.name} ({company.domain}, {company.country}). "
+        f"Context: {company.description}\n\nSignals:\n{signals_json}"
+    )
 
     captured: dict = {}
 
@@ -98,9 +123,16 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
     # exa_search is async — run_agent awaits awaitable impls automatically.
     # record_assessment is sync — run_agent calls it directly.
     impls = {"exa_search": exa_search, "record_assessment": record_assessment}
-    await run_agent(system, user, [EXA_SEARCH_TOOL, RECORD_TOOL], impls,
-                    max_turns=MAX_ANALYST_SEARCHES + 3, final_tools={"record_assessment"}, log=log,
-                    max_tokens=ANALYST_MAX_TOKENS)
+    await run_agent(
+        system,
+        user,
+        [EXA_SEARCH_TOOL, RECORD_TOOL],
+        impls,
+        max_turns=MAX_ANALYST_SEARCHES + 3,
+        final_tools={"record_assessment"},
+        log=log,
+        max_tokens=ANALYST_MAX_TOKENS,
+    )
 
     if not captured:  # agent never produced an assessment — conservative default
         _log.warning(
@@ -117,14 +149,17 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
     except (ValueError, TypeError):
         _log.warning(
             "analyst: non-numeric score %r — falling back to conservative score 3 for company=%r",
-            raw_score, company.name,
+            raw_score,
+            company.name,
         )
         int_score = 3
     clamped_score = max(1, min(10, int_score))
     if clamped_score != int_score:
         _log.warning(
             "analyst: score out of range (got %r) — clamped to %d for company=%r",
-            raw_score, clamped_score, company.name,
+            raw_score,
+            clamped_score,
+            company.name,
         )
     captured["score"] = clamped_score
 
@@ -132,7 +167,8 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
     if raw_tier not in _VALID_TIERS:
         _log.warning(
             "analyst: invalid tier %r — falling back to 'Tier 3' for company=%r",
-            raw_tier, company.name,
+            raw_tier,
+            company.name,
         )
         captured["tier"] = "Tier 3"
 
@@ -140,7 +176,8 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
     if raw_confidence not in _VALID_CONFIDENCES:
         _log.warning(
             "analyst: invalid confidence %r — falling back to 'low' for company=%r",
-            raw_confidence, company.name,
+            raw_confidence,
+            company.name,
         )
         captured["confidence"] = "low"
 
@@ -150,21 +187,29 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
     except Exception as exc:
         _log.warning(
             "analyst: malformed outreach for company=%r (%s) — using empty fallback",
-            company.name, exc,
+            company.name,
+            exc,
         )
         outreach = OutreachDraft(persona="", subject="", first_line="", body="")
     try:
-        score = ICPScore(company_name=company.name, domain=company.domain, outreach=outreach, **captured)
+        score = ICPScore(
+            company_name=company.name, domain=company.domain, outreach=outreach, **captured
+        )
     except Exception as exc:
         _log.warning(
             "analyst: ICPScore construction failed for company=%r (%s) — using conservative default",
-            company.name, exc,
+            company.name,
+            exc,
         )
         return _conservative_default(company)
     result = apply_guards(score, signals)
     _log.info(
         "analyst done: company=%r score=%d tier=%s confidence=%s needs_human_research=%s",
-        company.name, result.score, result.tier, result.confidence, result.needs_human_research,
+        company.name,
+        result.score,
+        result.tier,
+        result.confidence,
+        result.needs_human_research,
     )
     return result
 

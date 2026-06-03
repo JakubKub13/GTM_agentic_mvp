@@ -1,15 +1,18 @@
 """lemlist adapter: queue a Tier-1 lead into a PAUSED campaign as a draft. Same interface as brevo."""
+
 from duvo import config
 from duvo.config import require
-from duvo.infra import http_client
+from duvo.infra import http_client, retry
 from duvo.infra.logging_setup import get_logger
 from duvo.models import ICPScore
+from duvo.writeback.registry import register_outreach
 
 log = get_logger(__name__)
 
 _BASE = "https://api.lemlist.com/api"
 
 
+@register_outreach("lemlist")
 async def queue_lead(score: ICPScore, test_email: str) -> str:
     """Add the lead to a paused lemlist campaign for rep review before sending.
 
@@ -30,7 +33,9 @@ async def queue_lead(score: ICPScore, test_email: str) -> str:
 
     log.info(
         "lemlist: queuing lead for company=%s campaign=%s email=%s",
-        score.company_name, campaign, test_email,
+        score.company_name,
+        campaign,
+        test_email,
     )
 
     url = f"{_BASE}/campaigns/{campaign}/leads"
@@ -43,11 +48,11 @@ async def queue_lead(score: ICPScore, test_email: str) -> str:
         "icebreaker": score.outreach.first_line,
     }
 
-    r = await http_client.get_client().post(
-        url,
-        auth=("", api_key),
-        json=payload,
-        params={"deduplicate": "true"},
+    r = await retry.with_retries(
+        lambda: http_client.get_client().post(
+            url, auth=("", api_key), json=payload, params={"deduplicate": "true"}
+        ),
+        max_attempts=config.HTTP_MAX_RETRIES,
     )
 
     try:
@@ -55,12 +60,15 @@ async def queue_lead(score: ICPScore, test_email: str) -> str:
     except Exception:
         log.error(
             "lemlist: failed to queue lead for company=%s campaign=%s — status=%s",
-            score.company_name, campaign, r.status_code,
+            score.company_name,
+            campaign,
+            r.status_code,
         )
         raise
 
     log.info(
         "lemlist: lead successfully queued for company=%s campaign=%s",
-        score.company_name, campaign,
+        score.company_name,
+        campaign,
     )
     return f"lead queued in paused lemlist campaign {campaign} (awaiting rep approval)"

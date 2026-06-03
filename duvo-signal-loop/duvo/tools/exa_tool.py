@@ -1,10 +1,12 @@
 """exa_search — the tool scouts and the analyst use to search the web."""
+
 import asyncio
 
 from exa_py import Exa
 
 from duvo.config import EXA_API_KEY, require
 from duvo.infra.logging_setup import get_logger
+from duvo.llm.base import ToolSpec, tool_schema
 
 _log = get_logger(__name__)
 
@@ -26,20 +28,17 @@ def _get_exa() -> Exa:
     return _exa
 
 
-EXA_SEARCH_TOOL = {
-    "name": "exa_search",
-    "description": (
+EXA_SEARCH_TOOL: ToolSpec = tool_schema(
+    "exa_search",
+    (
         "Search the web for recent, sourced information. Returns up to 5 results "
         "with title, published date, url, and a short summary. Use a focused query; "
         "run again with a refined query to follow a promising thread."
     ),
-    "input_schema": {
+    {
         "type": "object",
         "properties": {
-            "query": {
-                "type": "string",
-                "description": "Focused search query.",
-            },
+            "query": {"type": "string", "description": "Focused search query."},
             "start_published_date": {
                 "type": "string",
                 "description": "Optional ISO date (YYYY-MM-DD); only results published after it.",
@@ -47,7 +46,7 @@ EXA_SEARCH_TOOL = {
         },
         "required": ["query"],
     },
-}
+)
 
 
 def _search_sync(query: str, start_published_date: str | None) -> str:

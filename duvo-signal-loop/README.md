@@ -19,7 +19,7 @@
 
 - 🤖 **Multi-agent by design** — scouts → analyst → router, each a real tool-using agent on one shared loop.
 - ⚡ **Async-first & production-ready** — `asyncio` end-to-end, pooled `httpx` client, bounded concurrency, timeouts at every layer.
-- 🔌 **Pluggable stack** — swap CRM (Attio ⇄ HubSpot) and outreach (Brevo ⇄ lemlist) with a single env var.
+- 🔌 **Pluggable stack** — swap LLM (Anthropic ⇄ OpenAI ⇄ local), CRM (Attio ⇄ HubSpot), and outreach (Brevo ⇄ lemlist) with a single env var.
 - 🛡️ **Bounded agency** — deterministic guards, score clamping, and a router that **never sends** without a human in the loop.
 - 🧪 **Fully tested offline** — 295 mocked tests, no API keys or network required.
 - 📊 **Self-documenting runs** — every run renders an HTML audit report of decisions and agent tool calls.
@@ -56,6 +56,23 @@ Every agent runs on one shared async tool-use loop (`duvo.agent_core.run_agent`)
 | 🔎 **Scout** (×4, concurrent) | Each owns a beat (ERP · hiring · M&A · pain), uses an `exa_search` tool, decides its own queries, and returns **only sourced signals**. The four fan out via `asyncio.gather`; one failing beat is isolated so the others still produce signals. Since `exa-py` is sync-only, `exa_search` offloads to a thread via `asyncio.to_thread` to keep the event loop responsive. |
 | 🧠 **Analyst** | Validates signals (can run its own verification searches before trusting a claim), scores ICP fit, and drafts personalized outreach. A deterministic `apply_guards()` caps any hallucinated confidence, and the score is clamped to the valid **1–10** range before it is trusted. |
 | 🚦 **Router** | Decides how to action the account — its tools *are* the write-backs. They self-guard: Slack/outreach refuse anything but a confident Tier 1, and the guard fires **before** the write-back module is even imported. |
+
+---
+
+## 🔌 Pluggable LLM
+
+All agents share one async tool-use loop (`duvo.agent_core.run_agent`). The model backend is swapped via two env vars — no code changes needed. `duvo/llm/` owns all provider concerns; only `duvo/llm/litellm_provider.py` may import `litellm`.
+
+| `LLM_MODEL` | Extra var needed | Notes |
+|---|---|---|
+| `anthropic/claude-sonnet-4-6` | *(none — uses `ANTHROPIC_API_KEY`)* | Default; preserves original behavior |
+| `openai/gpt-4o` | `OPENAI_API_KEY=sk-…` | OpenAI cloud |
+| `openai/<served-model>` | `LLM_BASE_URL=http://host:8000/v1` | vLLM or any OpenAI-compatible server |
+| `ollama_chat/llama3.1` | `LLM_BASE_URL=http://localhost:11434` | Local Ollama |
+
+Set `LLM_PROVIDER=litellm` (default) to use the LiteLLM routing layer. `LLM_MAX_RETRIES` (default `2`) controls per-call model retries; `HTTP_MAX_RETRIES` (default `3`) caps write-back HTTP retries.
+
+The LLM, CRM, and outreach seams all follow the same registry + Protocol pattern — Slack/notifications are the next natural drop-in extension point.
 
 ---
 

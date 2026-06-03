@@ -1,4 +1,5 @@
 """Router agent: decides how to action a scored account; its tools are the write-backs."""
+
 import json
 import re
 
@@ -6,6 +7,7 @@ from duvo import config
 from duvo.agent_core import run_agent
 from duvo.agents.agent_prompts import load_prompt
 from duvo.infra.logging_setup import get_logger
+from duvo.llm.base import ToolSpec, tool_schema
 from duvo.models import RunResult
 from duvo.writeback import crm
 
@@ -46,27 +48,26 @@ def lead_email_for(base_email: str, domain: str) -> str:
     base_local = local.split("+", 1)[0]  # drop any existing +tag so we don't stack
     return f"{base_local}+{tag}@{host}"
 
+
 ROUTER_SYSTEM = load_prompt("router")
 
 
-def _tool_schema(name: str, desc: str) -> dict:
-    """Build a minimal Anthropic tool schema dict with no input parameters.
+def _tool_schema(name: str, desc: str) -> ToolSpec:
+    """Build a no-parameter ToolSpec for a router write-back tool.
 
     Args:
         name: The tool name (must match the key in the ``impls`` dict).
         desc: A human-readable description shown to the model.
 
     Returns:
-        A dict suitable for passing to ``run_agent`` as one entry in *tools*.
+        A :class:`~duvo.llm.base.ToolSpec` suitable for passing to ``run_agent``.
     """
-    return {
-        "name": name,
-        "description": desc,
-        "input_schema": {"type": "object", "properties": {}},
-    }
+    return tool_schema(name, desc, {"type": "object", "properties": {}})
 
 
-async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST_EMAIL, log=None) -> None:
+async def run_router(
+    rr: RunResult, dry_run: bool, test_email: str = config.TEST_EMAIL, log=None
+) -> None:
     """Drive the routing agent to decide write-back actions for a scored account.
 
     The agent is given the ICP score and picks which write-back tools to call.
@@ -96,7 +97,10 @@ async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST
 
     _log.info(
         "router start: company=%s tier=%s confident_t1=%s dry_run=%s",
-        s.company_name, s.tier, confident_t1, dry_run,
+        s.company_name,
+        s.tier,
+        confident_t1,
+        dry_run,
     )
 
     # ------------------------------------------------------------------
@@ -125,6 +129,7 @@ async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST
             rr.slack_status = status
         else:
             from duvo.writeback import slack  # lazy — module added in a later group
+
             try:
                 status = await slack.alert_tier1(s)
             except Exception as exc:
@@ -149,6 +154,7 @@ async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST
             rr.outreach_status = status
         else:
             from duvo.writeback import outreach  # lazy — module added in a later group
+
             # Per-account plus-addressing so each lead is a distinct contact in the
             # outreach tool (all still delivering to the one real inbox).
             lead_email = lead_email_for(test_email, s.domain)
@@ -167,7 +173,10 @@ async def run_router(rr: RunResult, dry_run: bool, test_email: str = config.TEST
         """Signal the agent loop to terminate; routing is complete."""
         _log.info(
             "routing complete: company=%s crm=%s slack=%s outreach=%s",
-            s.company_name, rr.crm_status, rr.slack_status, rr.outreach_status,
+            s.company_name,
+            rr.crm_status,
+            rr.slack_status,
+            rr.outreach_status,
         )
         return "done"
 

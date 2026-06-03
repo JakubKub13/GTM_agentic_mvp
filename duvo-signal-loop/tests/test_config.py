@@ -1,4 +1,5 @@
 """Tests for config.py — require() helper and module-level defaults."""
+
 import pytest
 
 
@@ -43,6 +44,7 @@ class TestModuleDefaults:
         import importlib
 
         from duvo import config
+
         importlib.reload(config)
         assert config.CRM_PROVIDER == "attio"
 
@@ -52,12 +54,14 @@ class TestModuleDefaults:
         import importlib
 
         from duvo import config
+
         importlib.reload(config)
         assert config.OUTREACH_PROVIDER == "brevo"
 
     def test_test_email_default_is_present(self):
         """TEST_EMAIL has a sensible non-empty default."""
         from duvo import config
+
         # The default is jakubkubala3@gmail.com; it must be non-empty
         assert config.TEST_EMAIL != ""
 
@@ -67,6 +71,7 @@ class TestModuleDefaults:
         import importlib
 
         from duvo import config
+
         importlib.reload(config)
         assert config.LOG_LEVEL == "INFO"
 
@@ -77,6 +82,7 @@ class TestAsyncKnobs:
     def test_max_concurrent_accounts_exists_and_is_int(self):
         """MAX_CONCURRENT_ACCOUNTS is present and is an int."""
         from duvo import config
+
         assert hasattr(config, "MAX_CONCURRENT_ACCOUNTS")
         assert isinstance(config.MAX_CONCURRENT_ACCOUNTS, int)
 
@@ -86,12 +92,14 @@ class TestAsyncKnobs:
         import importlib
 
         from duvo import config
+
         importlib.reload(config)
         assert config.MAX_CONCURRENT_ACCOUNTS == 5
 
     def test_http_timeout_seconds_exists_and_is_float(self):
         """HTTP_TIMEOUT_SECONDS is present and is a float."""
         from duvo import config
+
         assert hasattr(config, "HTTP_TIMEOUT_SECONDS")
         assert isinstance(config.HTTP_TIMEOUT_SECONDS, float)
 
@@ -101,12 +109,14 @@ class TestAsyncKnobs:
         import importlib
 
         from duvo import config
+
         importlib.reload(config)
         assert config.HTTP_TIMEOUT_SECONDS == 30.0
 
     def test_anthropic_timeout_seconds_exists_and_is_float(self):
         """ANTHROPIC_TIMEOUT_SECONDS is present and is a float."""
         from duvo import config
+
         assert hasattr(config, "ANTHROPIC_TIMEOUT_SECONDS")
         assert isinstance(config.ANTHROPIC_TIMEOUT_SECONDS, float)
 
@@ -116,12 +126,14 @@ class TestAsyncKnobs:
         import importlib
 
         from duvo import config
+
         importlib.reload(config)
         assert config.ANTHROPIC_TIMEOUT_SECONDS == 120.0
 
     def test_account_timeout_seconds_exists_and_is_float(self):
         """ACCOUNT_TIMEOUT_SECONDS is present and is a float."""
         from duvo import config
+
         assert hasattr(config, "ACCOUNT_TIMEOUT_SECONDS")
         assert isinstance(config.ACCOUNT_TIMEOUT_SECONDS, float)
 
@@ -131,5 +143,18 @@ class TestAsyncKnobs:
         import importlib
 
         from duvo import config
+
         importlib.reload(config)
         assert config.ACCOUNT_TIMEOUT_SECONDS == 300.0
+
+
+def test_llm_config_defaults_present():
+    from duvo import config
+
+    assert config.LLM_MODEL == "anthropic/claude-sonnet-4-6"
+    assert config.LLM_PROVIDER == "litellm"
+    assert isinstance(config.LLM_BASE_URL, str)
+    assert isinstance(config.LLM_MAX_RETRIES, int)
+    assert isinstance(config.HTTP_MAX_RETRIES, int)
+    # CLAUDE_MODEL is superseded by LLM_MODEL and must be gone.
+    assert not hasattr(config, "CLAUDE_MODEL")

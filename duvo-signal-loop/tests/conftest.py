@@ -1,4 +1,5 @@
 """Shared test helpers for the duvo-signal-loop test suite."""
+
 from unittest.mock import AsyncMock, MagicMock
 
 from duvo.models import ICPScore, OutreachDraft
@@ -84,3 +85,40 @@ def make_score(
             body=outreach_body,
         ),
     )
+
+
+from duvo.llm.base import LLMResponse, Message, ToolCall  # noqa: E402
+
+
+def make_llm_response(content: str = "", tool_calls=None, stop_reason: str = "stop") -> LLMResponse:
+    """Build an LLMResponse for tests. ``tool_calls`` is a list of ToolCall (or None)."""
+    calls = tool_calls or []
+    return LLMResponse(
+        message=Message(role="assistant", content=content, tool_calls=calls),
+        tool_calls=calls,
+        stop_reason=stop_reason,
+    )
+
+
+def make_tool_call(name: str, arguments: dict | None = None, id_: str = "call_1") -> ToolCall:
+    return ToolCall(id=id_, name=name, arguments=arguments or {})
+
+
+class FakeLLMProvider:
+    """A fake LLMProvider that returns a fixed sequence of LLMResponses.
+
+    ``complete`` records each LLMRequest it receives in ``self.requests`` so tests
+    can assert on what the loop sent.
+    """
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.requests = []
+        self.calls = 0
+
+    async def complete(self, request):
+        self.requests.append(request)
+        self.calls += 1
+        # Repeat the last response if the loop asks for more than provided.
+        idx = min(self.calls - 1, len(self._responses) - 1)
+        return self._responses[idx]

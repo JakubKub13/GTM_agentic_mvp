@@ -1,9 +1,11 @@
 """Attio CRM write-back: create a company record + an evidence note (AI-suggested)."""
+
 from duvo import config
 from duvo.config import require
-from duvo.infra import http_client
+from duvo.infra import http_client, retry
 from duvo.infra.logging_setup import get_logger
 from duvo.models import ICPScore
+from duvo.writeback.registry import register_crm
 
 log = get_logger(__name__)
 
@@ -52,16 +54,23 @@ async def _create_company(score: ICPScore) -> str:
     log.info("Attio: creating company record for '%s' (%s)", score.company_name, score.domain)
 
     last = None
-    for attempt, values in enumerate((
-        {"name": score.company_name, "domains": [score.domain]},
-        {"name": score.company_name},
-    )):
+    for attempt, values in enumerate(
+        (
+            {"name": score.company_name, "domains": [score.domain]},
+            {"name": score.company_name},
+        )
+    ):
         if attempt > 0:
             log.debug(
                 "Attio: first payload shape rejected — retrying with name-only for '%s'",
                 score.company_name,
             )
-        last = await http_client.get_client().post(url, headers=_headers(), json={"data": {"values": values}})
+        last = await retry.with_retries(
+            lambda values=values: http_client.get_client().post(
+                url, headers=_headers(), json={"data": {"values": values}}
+            ),
+            max_attempts=config.HTTP_MAX_RETRIES,
+        )
         if last.status_code < 300:
             record_id: str = last.json()["data"]["id"]["record_id"]
             log.info("Attio: company record created — record_id=%s", record_id)
@@ -89,11 +98,15 @@ async def _create_note(score: ICPScore, record_id: str) -> None:
         }
     }
     log.info("Attio: creating evidence note for record_id=%s", record_id)
-    resp = await http_client.get_client().post(f"{_BASE}/notes", headers=_headers(), json=payload)
+    resp = await retry.with_retries(
+        lambda: http_client.get_client().post(f"{_BASE}/notes", headers=_headers(), json=payload),
+        max_attempts=config.HTTP_MAX_RETRIES,
+    )
     resp.raise_for_status()
     log.info("Attio: evidence note created for record_id=%s", record_id)
 
 
+@register_crm("attio")
 async def upsert_account(score: ICPScore) -> str:
     """Create a company record + evidence note in Attio.
 

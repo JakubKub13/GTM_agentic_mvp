@@ -1,4 +1,5 @@
 """Tests for writeback/brevo.py — Brevo contact-list write-back (never sends) (async httpx)."""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from tests.conftest import _fake_response, make_fake_async_client, make_score
 # ---------------------------------------------------------------------------
 # _headers
 # ---------------------------------------------------------------------------
+
 
 class TestHeaders:
     def test_contains_api_key(self, monkeypatch):
@@ -28,6 +30,7 @@ class TestHeaders:
 # ---------------------------------------------------------------------------
 # queue_lead — full payload succeeds
 # ---------------------------------------------------------------------------
+
 
 class TestQueueLeadFullPayload:
     async def test_posts_to_contacts_endpoint(self, monkeypatch):
@@ -105,6 +108,7 @@ class TestQueueLeadFullPayload:
 # queue_lead — full payload fails, retry with minimal
 # ---------------------------------------------------------------------------
 
+
 class TestQueueLeadFallbackToMinimal:
     async def test_retries_with_minimal_payload_when_full_fails(self, monkeypatch):
         monkeypatch.setattr(config, "BREVO_API_KEY", "key")
@@ -154,10 +158,12 @@ class TestQueueLeadFallbackToMinimal:
 # queue_lead — both payloads fail → raise_for_status
 # ---------------------------------------------------------------------------
 
+
 class TestQueueLeadBothFail:
     async def test_raises_when_both_attempts_fail(self, monkeypatch):
         monkeypatch.setattr(config, "BREVO_API_KEY", "key")
         monkeypatch.setattr(config, "BREVO_LIST_ID", "42")
+        monkeypatch.setattr(config, "HTTP_MAX_RETRIES", 1)
         err_resp = _fake_response(500, raise_on_raise=True)
 
         client = make_fake_async_client(post=AsyncMock(return_value=err_resp))
@@ -170,6 +176,7 @@ class TestQueueLeadBothFail:
 # ---------------------------------------------------------------------------
 # BREVO_LIST_ID cast to int
 # ---------------------------------------------------------------------------
+
 
 class TestListIdCastToInt:
     async def test_list_id_cast_to_int(self, monkeypatch):
