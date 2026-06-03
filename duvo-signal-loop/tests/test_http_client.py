@@ -1,4 +1,5 @@
 """Tests for http_client.py — shared pooled async HTTP client."""
+
 import httpx
 import pytest
 
@@ -36,6 +37,7 @@ class TestGetClient:
     def test_client_timeout_reflects_config(self):
         """The client's timeout is configured from config.HTTP_TIMEOUT_SECONDS."""
         from duvo import config
+
         client = http_client.get_client()
         # httpx stores the timeout as an httpx.Timeout object; its .read attribute
         # (and the others) should match the scalar we passed in.

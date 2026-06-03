@@ -6,6 +6,7 @@ of good prompt hygiene. Code asks for a prompt by name via :func:`load_prompt`;
 dynamic values (a scout's beat, the per-agent search caps) are written as
 ``{placeholder}`` slots and filled in at load time.
 """
+
 from pathlib import Path
 
 _PROMPT_DIR = Path(__file__).parent

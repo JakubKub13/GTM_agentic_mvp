@@ -1,4 +1,5 @@
 """Tier-1 alert to #sales via incoming webhook."""
+
 from duvo import config
 from duvo.config import require
 from duvo.infra import http_client

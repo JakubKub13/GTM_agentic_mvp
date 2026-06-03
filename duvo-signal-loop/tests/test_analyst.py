@@ -1,4 +1,5 @@
 """Tests for analyst.py — fully mocked, no real Anthropic/Exa calls."""
+
 import json
 from unittest.mock import patch
 
@@ -9,8 +10,14 @@ from duvo.models import Company, ICPScore, OutreachDraft, Signal
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_company(**kw):
-    defaults = {"name": "Acme Corp", "domain": "acme.com", "country": "DE", "description": "A retail chain."}
+    defaults = {
+        "name": "Acme Corp",
+        "domain": "acme.com",
+        "country": "DE",
+        "description": "A retail chain.",
+    }
     defaults.update(kw)
     return Company(**defaults)
 
@@ -54,17 +61,21 @@ def _make_fake_run_agent(assessment_kwargs=None):
     The fake must be an async function because run_analyst does:
         await run_agent(...)
     """
-    async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(),
-                             log=None, max_tokens=2000):
+
+    async def fake_run_agent(
+        system, user, tools, impls, max_turns=8, final_tools=(), log=None, max_tokens=2000
+    ):
         if assessment_kwargs is not None:
             impls["record_assessment"](**assessment_kwargs)
         return []
+
     return fake_run_agent
 
 
 # ---------------------------------------------------------------------------
 # TestRunAnalyst — normal path
 # ---------------------------------------------------------------------------
+
 
 class TestRunAnalystNormalPath:
     """run_analyst: builds ICPScore from record_assessment output after guards."""
@@ -112,6 +123,7 @@ class TestRunAnalystNormalPath:
 # big record_assessment payload (assessment + outreach draft) isn't truncated.
 # ---------------------------------------------------------------------------
 
+
 class TestRunAnalystMaxTokens:
     """run_analyst passes a max_tokens above the run_agent default (2000)."""
 
@@ -120,8 +132,9 @@ class TestRunAnalystMaxTokens:
         signals = [_make_signal()]
         captured = {}
 
-        async def capturing_run_agent(system, user, tools, impls, max_turns=8,
-                                      final_tools=(), log=None, max_tokens=2000):
+        async def capturing_run_agent(
+            system, user, tools, impls, max_turns=8, final_tools=(), log=None, max_tokens=2000
+        ):
             captured["max_tokens"] = max_tokens
             impls["record_assessment"](**VALID_ASSESSMENT)
             return []
@@ -135,6 +148,7 @@ class TestRunAnalystMaxTokens:
 # ---------------------------------------------------------------------------
 # TestRunAnalystConservativeDefault
 # ---------------------------------------------------------------------------
+
 
 class TestRunAnalystConservativeDefault:
     """When the agent never calls record_assessment, a conservative default is returned."""
@@ -162,6 +176,7 @@ class TestRunAnalystConservativeDefault:
 # TestScoreClamping
 # ---------------------------------------------------------------------------
 
+
 class TestScoreClamping:
     """Scores outside 1-10 are clamped before ICPScore construction."""
 
@@ -176,8 +191,13 @@ class TestScoreClamping:
         assert result.score == 10
 
     async def test_score_0_clamped_to_1(self):
-        assessment = {**VALID_ASSESSMENT, "score": 0, "tier": "Tier 3", "confidence": "low",
-                      "needs_human_research": True}
+        assessment = {
+            **VALID_ASSESSMENT,
+            "score": 0,
+            "tier": "Tier 3",
+            "confidence": "low",
+            "needs_human_research": True,
+        }
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
@@ -187,8 +207,13 @@ class TestScoreClamping:
         assert result.score == 1
 
     async def test_score_minus_5_clamped_to_1(self):
-        assessment = {**VALID_ASSESSMENT, "score": -5, "tier": "Tier 3", "confidence": "low",
-                      "needs_human_research": True}
+        assessment = {
+            **VALID_ASSESSMENT,
+            "score": -5,
+            "tier": "Tier 3",
+            "confidence": "low",
+            "needs_human_research": True,
+        }
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
@@ -234,6 +259,7 @@ class TestScoreClamping:
 # TestTierConfidenceCoercion
 # ---------------------------------------------------------------------------
 
+
 class TestTierConfidenceCoercion:
     """Invalid tier/confidence values are coerced to safe defaults."""
 
@@ -243,13 +269,13 @@ class TestTierConfidenceCoercion:
         # No dated signals → guards also force confidence=low, needs_human_research=True.
         assessment = {
             **VALID_ASSESSMENT,
-            "tier": "Tier 99",          # invalid — must be coerced
-            "score": 4,                  # ensures guards map to Tier 3 (consistent with coercion)
+            "tier": "Tier 99",  # invalid — must be coerced
+            "score": 4,  # ensures guards map to Tier 3 (consistent with coercion)
             "confidence": "low",
             "needs_human_research": True,
         }
         company = _make_company()
-        signals = []                     # no signals → guards keep Tier 3
+        signals = []  # no signals → guards keep Tier 3
         fake = _make_fake_run_agent(assessment)
         with patch("duvo.agents.analyst.run_agent", side_effect=fake):
             # Without coercion this raises ValidationError; coercion must have run.
@@ -262,10 +288,10 @@ class TestTierConfidenceCoercion:
         # No dated signals → guards also force confidence=low, so the assertion is stable.
         assessment = {
             **VALID_ASSESSMENT,
-            "confidence": "very_high",   # invalid — must be coerced
+            "confidence": "very_high",  # invalid — must be coerced
         }
         company = _make_company()
-        signals = []                     # no dated signals → guards enforce low anyway
+        signals = []  # no dated signals → guards enforce low anyway
         fake = _make_fake_run_agent(assessment)
         with patch("duvo.agents.analyst.run_agent", side_effect=fake):
             # Without coercion this raises ValidationError; coercion must have run.
@@ -276,6 +302,7 @@ class TestTierConfidenceCoercion:
 # ---------------------------------------------------------------------------
 # TestPartialAssessmentFallback
 # ---------------------------------------------------------------------------
+
 
 class TestPartialAssessmentFallback:
     """run_analyst: a partial record_assessment (missing required field) returns the
@@ -301,6 +328,7 @@ class TestPartialAssessmentFallback:
 # ---------------------------------------------------------------------------
 # TestOutreachDraftFallback
 # ---------------------------------------------------------------------------
+
 
 class TestOutreachDraftFallback:
     """run_analyst: malformed outreach dict falls back to empty OutreachDraft."""
@@ -345,11 +373,13 @@ class TestOutreachDraftFallback:
 # TestApplyGuards — unit tests (no agent involved; apply_guards is sync)
 # ---------------------------------------------------------------------------
 
+
 class TestApplyGuards:
     """apply_guards: deterministic post-guard logic tested directly (sync — no I/O)."""
 
-    def _make_score(self, *, score=8, tier="Tier 1", confidence="high",
-                    needs_human_research=False) -> ICPScore:
+    def _make_score(
+        self, *, score=8, tier="Tier 1", confidence="high", needs_human_research=False
+    ) -> ICPScore:
         return ICPScore(
             company_name="TestCo",
             domain="testco.com",
@@ -397,54 +427,74 @@ class TestApplyGuards:
     # -- Low confidence + high score is capped
 
     def test_low_confidence_score_7_capped_to_6(self):
-        score = self._make_score(score=7, confidence="low", tier="Tier 2", needs_human_research=True)
+        score = self._make_score(
+            score=7, confidence="low", tier="Tier 2", needs_human_research=True
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.score == 6
 
     def test_low_confidence_score_9_capped_to_6(self):
-        score = self._make_score(score=9, confidence="low", tier="Tier 1", needs_human_research=True)
+        score = self._make_score(
+            score=9, confidence="low", tier="Tier 1", needs_human_research=True
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.score == 6
 
     def test_low_confidence_score_6_not_capped(self):
-        score = self._make_score(score=6, confidence="low", tier="Tier 2", needs_human_research=True)
+        score = self._make_score(
+            score=6, confidence="low", tier="Tier 2", needs_human_research=True
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.score == 6  # unchanged
 
     def test_high_confidence_score_9_not_capped(self):
-        score = self._make_score(score=9, confidence="high", tier="Tier 1", needs_human_research=False)
+        score = self._make_score(
+            score=9, confidence="high", tier="Tier 1", needs_human_research=False
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.score == 9
 
     # -- Tier assignment
 
     def test_score_8_not_needs_human_research_gives_tier1(self):
-        score = self._make_score(score=8, confidence="high", needs_human_research=False, tier="Tier 3")
+        score = self._make_score(
+            score=8, confidence="high", needs_human_research=False, tier="Tier 3"
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 1"
 
     def test_score_9_not_needs_human_research_gives_tier1(self):
-        score = self._make_score(score=9, confidence="high", needs_human_research=False, tier="Tier 3")
+        score = self._make_score(
+            score=9, confidence="high", needs_human_research=False, tier="Tier 3"
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 1"
 
     def test_score_5_gives_tier2(self):
-        score = self._make_score(score=5, confidence="high", needs_human_research=False, tier="Tier 1")
+        score = self._make_score(
+            score=5, confidence="high", needs_human_research=False, tier="Tier 1"
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 2"
 
     def test_score_7_not_needs_human_research_gives_tier2(self):
-        score = self._make_score(score=7, confidence="high", needs_human_research=False, tier="Tier 1")
+        score = self._make_score(
+            score=7, confidence="high", needs_human_research=False, tier="Tier 1"
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 2"
 
     def test_score_4_gives_tier3(self):
-        score = self._make_score(score=4, confidence="high", needs_human_research=False, tier="Tier 1")
+        score = self._make_score(
+            score=4, confidence="high", needs_human_research=False, tier="Tier 1"
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 3"
 
     def test_score_1_gives_tier3(self):
-        score = self._make_score(score=1, confidence="high", needs_human_research=False, tier="Tier 1")
+        score = self._make_score(
+            score=1, confidence="high", needs_human_research=False, tier="Tier 1"
+        )
         result = apply_guards(score, [self._dated_signal()])
         assert result.tier == "Tier 3"
 
@@ -452,14 +502,18 @@ class TestApplyGuards:
 
     def test_needs_human_research_true_with_score_9_gives_tier2(self):
         """needs_human_research=True prevents Tier 1 assignment even with high score."""
-        score = self._make_score(score=9, confidence="high", needs_human_research=True, tier="Tier 1")
+        score = self._make_score(
+            score=9, confidence="high", needs_human_research=True, tier="Tier 1"
+        )
         result = apply_guards(score, [self._dated_signal()])
         # score>=8 but needs_human_research=True → elif score>=5 → Tier 2
         assert result.tier == "Tier 2"
 
     def test_needs_human_research_with_no_dated_gives_tier2_not_tier1(self):
         """No dated signals → confidence=low, needs_human_research=True, score capped → Tier 2."""
-        score = self._make_score(score=9, confidence="high", needs_human_research=False, tier="Tier 1")
+        score = self._make_score(
+            score=9, confidence="high", needs_human_research=False, tier="Tier 1"
+        )
         result = apply_guards(score, [self._undated_signal()])
         # No dated → confidence=low, needs_human_research=True, score(9) capped to 6 → Tier 2
         assert result.tier == "Tier 2"
@@ -472,6 +526,7 @@ class TestApplyGuards:
 # Per "defensive coercion over trust", parse the string so a confident Tier-1
 # still gets a real draft instead of an empty fallback.
 # ---------------------------------------------------------------------------
+
 
 class TestOutreachStringCoercion:
     async def test_outreach_json_string_is_parsed_into_draft(self):

@@ -10,6 +10,7 @@ Run from the project root::
 
     uv run python scripts/build_agents_md.py
 """
+
 from __future__ import annotations
 
 import re
@@ -51,7 +52,11 @@ def _scope_note(frontmatter: str) -> str:
     match = _PATHS.search(frontmatter)
     if not match:
         return ""
-    globs = [line.strip().lstrip("-").strip().strip('"') for line in match.group(1).splitlines() if line.strip()]
+    globs = [
+        line.strip().lstrip("-").strip().strip('"')
+        for line in match.group(1).splitlines()
+        if line.strip()
+    ]
     joined = ", ".join(f"`{g}`" for g in globs)
     return f"> Applies when working in {joined}.\n\n"
 

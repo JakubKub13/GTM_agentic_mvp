@@ -5,6 +5,7 @@ the module level so every write-back module shares one connection pool instead
 of opening a new pool per request.  Call :func:`aclose` during application
 shutdown to drain in-flight connections cleanly.
 """
+
 import httpx
 
 from duvo import config

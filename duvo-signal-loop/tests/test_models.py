@@ -1,4 +1,5 @@
 """Tests for models.py — Pydantic contract shared across all agents."""
+
 import pytest
 from pydantic import ValidationError
 
@@ -100,6 +101,7 @@ class TestOutreachDraft:
 class TestICPScore:
     def _make_outreach(self):
         from duvo.models import OutreachDraft
+
         return OutreachDraft(
             persona="VP Sales",
             subject="Subject",
@@ -291,6 +293,7 @@ class TestICPScore:
 class TestRunResult:
     def _make_score(self):
         from duvo.models import ICPScore, OutreachDraft
+
         return ICPScore(
             company_name="Rohlik",
             domain="rohlik.cz",

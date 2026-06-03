@@ -1,4 +1,5 @@
 """Tests for reporter.py — HTML generation from RunResult objects."""
+
 import os
 
 from duvo.models import RunResult, Signal
@@ -7,6 +8,7 @@ from tests.conftest import make_score
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_signal(title: str = "Test Signal", signal_type: str = "hiring") -> Signal:
     return Signal(
@@ -42,13 +44,16 @@ def _make_result(
         crm_status=crm_status,
         slack_status=slack_status,
         outreach_status=outreach_status,
-        agent_log=agent_log if agent_log is not None else ["scout_search(acme.com)", "analyst_score()"],
+        agent_log=agent_log
+        if agent_log is not None
+        else ["scout_search(acme.com)", "analyst_score()"],
     )
 
 
 # ---------------------------------------------------------------------------
 # Basic generation tests
 # ---------------------------------------------------------------------------
+
 
 class TestGenerateReport:
     def test_creates_file_and_returns_path(self, tmp_path):
@@ -176,6 +181,7 @@ class TestGenerateReport:
 # dirname-empty guard
 # ---------------------------------------------------------------------------
 
+
 class TestDirnameGuard:
     def test_no_raise_when_path_has_no_directory(self, tmp_path, monkeypatch):
         """generate_report('r.html') in a flat cwd must not raise via makedirs('')."""
@@ -192,6 +198,7 @@ class TestDirnameGuard:
 # ---------------------------------------------------------------------------
 # Autoescape test
 # ---------------------------------------------------------------------------
+
 
 class TestAutoescape:
     def test_special_chars_escaped(self, tmp_path):

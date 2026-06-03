@@ -1,4 +1,5 @@
 """Tests for writeback/slack.py — Tier-1 alert via incoming webhook (async httpx)."""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from tests.conftest import _fake_response, make_fake_async_client, make_score
 # ---------------------------------------------------------------------------
 # alert_tier1 — happy path
 # ---------------------------------------------------------------------------
+
 
 class TestAlertTier1:
     async def test_posts_to_webhook_url(self, monkeypatch):
@@ -75,6 +77,7 @@ class TestAlertTier1:
 # ---------------------------------------------------------------------------
 # require guard — SLACK_WEBHOOK_URL must be present
 # ---------------------------------------------------------------------------
+
 
 class TestRequireWebhookUrl:
     async def test_raises_when_webhook_url_empty(self, monkeypatch):

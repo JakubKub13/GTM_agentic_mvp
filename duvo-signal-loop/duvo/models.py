@@ -1,4 +1,5 @@
 """Pydantic models — the contract shared across all agents."""
+
 from __future__ import annotations
 
 from typing import Literal
@@ -50,4 +51,4 @@ class RunResult(BaseModel):
     crm_status: str = "skipped"
     slack_status: str = "skipped"
     outreach_status: str = "skipped"
-    agent_log: list[str] = []   # tool calls each agent made, for the report
+    agent_log: list[str] = []  # tool calls each agent made, for the report

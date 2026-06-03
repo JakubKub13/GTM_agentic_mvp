@@ -23,6 +23,7 @@ the project's `.codex/skills/`, a user skill in `~/.codex/skills/`).
 Exit code 0 on a clean scaffold (validation passed), 1 on any error or if the
 produced SKILL.md fails Codex's frontmatter rules.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -68,7 +69,9 @@ def _git_root(start: Path) -> Path | None:
     try:
         out = subprocess.run(
             ["git", "-C", str(start), "rev-parse", "--show-toplevel"],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return Path(out.stdout.strip())
     except (subprocess.CalledProcessError, FileNotFoundError):
@@ -192,7 +195,8 @@ def run_codex_validator(dest: Path) -> str | None:
             try:
                 out = subprocess.run(
                     [sys.executable, str(v), str(dest)],
-                    capture_output=True, text=True,
+                    capture_output=True,
+                    text=True,
                 )
                 return f"[codex quick_validate] {out.stdout.strip() or out.stderr.strip()}"
             except Exception as exc:  # noqa: BLE001
@@ -201,16 +205,32 @@ def run_codex_validator(dest: Path) -> str | None:
 
 
 JUDGMENT_CHECKS = [
-    (r"\$ARGUMENTS|\$\{ARGUMENTS\}|\$\d", "Uses $ARGUMENTS/$1 — Codex skills do NOT substitute these. "
-        "Rewrite to read the input from the user's natural-language request."),
-    (r"\bSkill tool\b|\bvia the Skill tool\b", "References the `Skill` tool — Codex has no callable Skill tool. "
-        "Reword cross-skill references as prose (e.g. 'also apply the X workflow')."),
-    (r"\bsubagent|\bTask tool\b|dispatch.*agent|spawn .*agent", "References subagents/Task — Codex has no subagents. "
-        "Flatten to sequential instructions."),
-    (r"\bRead tool\b|\bEdit tool\b|\bWrite tool\b|\bBash tool\b|\bGrep tool\b|\bGlob tool\b|\bTodoWrite\b|\bWebFetch\b|\bWebSearch\b",
-        "Names Claude tools — Codex uses shell/apply_patch/read_file/update_plan. Use plain verbs or Codex names."),
-    (r"\.claude\b|CLAUDE\.md|~/\.claude", "Mentions .claude / CLAUDE.md — repoint to .codex / AGENTS.md / ~/.codex."),
-    (r"/skill[- ]name|slash command|/<skill", "Claude slash-command framing — Codex invokes via `$skill-name`, `/skills`, or implicit match."),
+    (
+        r"\$ARGUMENTS|\$\{ARGUMENTS\}|\$\d",
+        "Uses $ARGUMENTS/$1 — Codex skills do NOT substitute these. "
+        "Rewrite to read the input from the user's natural-language request.",
+    ),
+    (
+        r"\bSkill tool\b|\bvia the Skill tool\b",
+        "References the `Skill` tool — Codex has no callable Skill tool. "
+        "Reword cross-skill references as prose (e.g. 'also apply the X workflow').",
+    ),
+    (
+        r"\bsubagent|\bTask tool\b|dispatch.*agent|spawn .*agent",
+        "References subagents/Task — Codex has no subagents. Flatten to sequential instructions.",
+    ),
+    (
+        r"\bRead tool\b|\bEdit tool\b|\bWrite tool\b|\bBash tool\b|\bGrep tool\b|\bGlob tool\b|\bTodoWrite\b|\bWebFetch\b|\bWebSearch\b",
+        "Names Claude tools — Codex uses shell/apply_patch/read_file/update_plan. Use plain verbs or Codex names.",
+    ),
+    (
+        r"\.claude\b|CLAUDE\.md|~/\.claude",
+        "Mentions .claude / CLAUDE.md — repoint to .codex / AGENTS.md / ~/.codex.",
+    ),
+    (
+        r"/skill[- ]name|slash command|/<skill",
+        "Claude slash-command framing — Codex invokes via `$skill-name`, `/skills`, or implicit match.",
+    ),
 ]
 
 
@@ -225,8 +245,12 @@ def scan_body_for_judgment(body: str) -> list[str]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="Scaffold a Codex skill from a Claude skill.")
     ap.add_argument("skill_name")
-    ap.add_argument("--source-root", help="dir containing <skill-name>/ (default: search .claude/skills roots)")
-    ap.add_argument("--dest-root", help="dir to create <skill-name>/ under (default: mirror, .claude->.codex)")
+    ap.add_argument(
+        "--source-root", help="dir containing <skill-name>/ (default: search .claude/skills roots)"
+    )
+    ap.add_argument(
+        "--dest-root", help="dir to create <skill-name>/ under (default: mirror, .claude->.codex)"
+    )
     ap.add_argument("--force", action="store_true", help="overwrite an existing destination skill")
     args = ap.parse_args()
 

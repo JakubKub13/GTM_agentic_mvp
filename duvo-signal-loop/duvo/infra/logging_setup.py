@@ -9,6 +9,7 @@ This keeps all project logs under a single ``duvo`` parent logger so that the
 log level and handlers can be configured once (e.g. from ``LOG_LEVEL`` in
 ``.env``) and inherited by every child logger automatically.
 """
+
 import logging
 
 from duvo import config

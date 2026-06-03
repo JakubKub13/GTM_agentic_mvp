@@ -1,4 +1,5 @@
 """Render an HTML audit log of the run — including each account's agent tool calls."""
+
 import os
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape

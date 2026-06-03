@@ -1,4 +1,5 @@
 """Tests for scouts.py — fully mocked, no real Anthropic/Exa calls."""
+
 from unittest.mock import patch
 
 from duvo.agents.scouts import run_scout, scout_all
@@ -23,17 +24,24 @@ def _make_fake_run_agent(signals_list, *, call_submit=True):
     The fake must be an async function because run_scout/run_analyst do:
         await run_agent(...)
     """
+
     async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
         if call_submit:
             impls["submit_signals"](signals=signals_list)
             if log is not None:
                 log.append("submit_signals(...)")
         return []
+
     return fake_run_agent
 
 
 def _make_company(**kw):
-    defaults = {"name": "Acme Corp", "domain": "acme.com", "country": "DE", "description": "A retail company."}
+    defaults = {
+        "name": "Acme Corp",
+        "domain": "acme.com",
+        "country": "DE",
+        "description": "A retail company.",
+    }
     defaults.update(kw)
     return Company(**defaults)
 
@@ -41,6 +49,7 @@ def _make_company(**kw):
 # ---------------------------------------------------------------------------
 # TestRunScout
 # ---------------------------------------------------------------------------
+
 
 class TestRunScout:
     """run_scout: converts captured dicts to Signal objects correctly."""
@@ -124,6 +133,7 @@ class TestRunScout:
         This must NOT raise (it previously crashed with a missing-arg TypeError and
         lost the beat). run_scout should treat it as zero signals.
         """
+
         async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             # Call with no signals argument at all — must be tolerated.
             result = impls["submit_signals"]()
@@ -137,6 +147,7 @@ class TestRunScout:
 
     async def test_submit_signals_called_with_none_returns_empty_list(self):
         """submit_signals(signals=None) is tolerated as zero signals."""
+
         async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             impls["submit_signals"](signals=None)
             return []
@@ -168,11 +179,13 @@ class TestRunScout:
 # TestScoutAll
 # ---------------------------------------------------------------------------
 
+
 class TestScoutAll:
     """scout_all: runs all 4 beats concurrently via asyncio.gather, flattens results."""
 
     async def test_runs_all_4_beats_and_flattens(self):
         """Each beat submits 1 signal; scout_all returns 4 signals total."""
+
         async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             impls["submit_signals"](signals=[SAMPLE_SIGNAL_DICT])
             return []
@@ -185,6 +198,7 @@ class TestScoutAll:
 
     async def test_all_4_signal_types_covered(self):
         """The 4 beats produce signals with all 4 signal_type values."""
+
         async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             impls["submit_signals"](signals=[SAMPLE_SIGNAL_DICT])
             return []
@@ -198,6 +212,7 @@ class TestScoutAll:
 
     async def test_empty_beats_return_empty_list(self):
         """If no beat finds signals, scout_all returns []."""
+
         async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             impls["submit_signals"](signals=[])
             return []
@@ -210,6 +225,7 @@ class TestScoutAll:
 
     async def test_log_shared_across_beats(self):
         """A shared log list accumulates entries from all 4 beats without corruption."""
+
         async def fake_run_agent(system, user, tools, impls, max_turns=8, final_tools=(), log=None):
             if log is not None:
                 log.append("scout_entry")
@@ -233,13 +249,15 @@ class TestScoutAll:
             if beat_key == "erp_migration":
                 raise RuntimeError("simulated scout failure")
             # Other beats return one signal each
-            return [Signal(
-                signal_type=beat_key,
-                title="Test Signal",
-                summary="summary",
-                source_url="https://example.com",
-                relevance="relevant",
-            )]
+            return [
+                Signal(
+                    signal_type=beat_key,
+                    title="Test Signal",
+                    summary="summary",
+                    source_url="https://example.com",
+                    relevance="relevant",
+                )
+            ]
 
         company = _make_company()
         with patch("duvo.agents.scouts.run_scout", side_effect=fake_run_scout):

@@ -1,4 +1,5 @@
 """Tests for writeback/lemlist.py — lemlist adapter (paused-campaign draft) (async httpx)."""
+
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from tests.conftest import _fake_response, make_fake_async_client, make_score
 # ---------------------------------------------------------------------------
 # queue_lead — happy path
 # ---------------------------------------------------------------------------
+
 
 class TestQueueLead:
     async def test_posts_to_leads_url(self, monkeypatch):
@@ -106,6 +108,7 @@ class TestQueueLead:
 # ---------------------------------------------------------------------------
 # require guard
 # ---------------------------------------------------------------------------
+
 
 class TestRequireKeys:
     async def test_raises_when_lemlist_api_key_missing(self, monkeypatch):
