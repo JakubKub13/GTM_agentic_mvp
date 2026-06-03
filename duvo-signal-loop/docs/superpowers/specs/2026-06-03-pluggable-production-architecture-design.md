@@ -230,3 +230,44 @@ Recorded as: assign a `run_id` per batch + a stable per-account key; persist per
 - Preserve the existing invariants: refused `slack_alert` / `outreach_queue` leaves status `"skipped"` and the safety guard fires **before** the lazy import; `apply_guards` gets direct unit tests.
 
 Run `uv run pytest -q` and `uv run ruff check` / `ruff format`; confirm green before claiming done.
+
+---
+
+## Appendix A — Verified dependency versions & API contracts (researched 2026-06-03)
+
+Versions and APIs below were confirmed against current documentation on 2026-06-03. The implementation plan builds on these.
+
+### Dependency decisions
+
+| Library | Latest stable (2026-06-03) | Decision for this work |
+|---|---|---|
+| **LiteLLM** | stable line ~`1.83.x` (`1.88.0.dev1` exists but is a dev build) | **add** `litellm>=1.83,<2`; run `uv add 'litellm>=1.83'` + `uv lock` to pin the exact current stable |
+| **anthropic** SDK | — | **drop** the direct dependency — LiteLLM calls the Anthropic REST API via `httpx` and does **not** require the `anthropic` package. Removing it eliminates the only direct Anthropic coupling once `agent_core` is provider-driven |
+| pydantic | `2.13.4` | keep `>=2.0` (already compatible; v2 API unchanged for our models) |
+| httpx | `0.28.1` | keep `>=0.27` |
+| pytest-asyncio | `1.4.0` | keep `>=0.23`; `asyncio_mode = "auto"` remains valid in the 1.x line |
+| jinja2 / python-dotenv / exa-py | unchanged | no change |
+
+### LiteLLM call contract (what `litellm_provider.py` translates to/from)
+
+- Import: `from litellm import acompletion`.
+- Call: `await acompletion(model, messages, tools=..., tool_choice="auto", max_tokens=..., num_retries=config.LLM_MAX_RETRIES, timeout=config.ANTHROPIC_TIMEOUT_SECONDS, api_base=config.LLM_BASE_URL or None, api_key=<provider key or None>, drop_params=True)`.
+  - `drop_params=True` is **required** — open-source / Ollama models reject unsupported OpenAI params otherwise.
+  - **System prompt is a `{"role":"system","content":...}` message**, not a separate kwarg (unlike the Anthropic SDK's `system=`).
+- Tools wire shape (OpenAI function format): `{"type":"function","function":{"name","description","parameters":<JSON-Schema object>}}`. The neutral `ToolSpec` → this dict happens inside the provider.
+- Response shape: `resp.choices[0].message` (assistant turn); `resp.choices[0].finish_reason` (e.g. `"tool_calls"`); `message.tool_calls[i]` → `.id`, `.type == "function"`, `.function.name`, `.function.arguments` (**a JSON string**).
+  - `function.arguments` must be parsed with `json.loads` **defensively** — LiteLLM docs warn the JSON may be invalid; on parse failure, degrade (treat as `{}` / surface a tool-error result) rather than raising, consistent with the codebase's "coerce, don't trust" rule.
+- Round-trip: re-append the assistant message **including its `tool_calls`**, then one `{"role":"tool","tool_call_id":...,"name":...,"content":str}` per result. The neutral `Message` carries `tool_calls` / `tool_call_id` so the provider can serialize this correctly; `agent_core` only passes neutral `Message`s.
+
+### Model-string routing (provider selection by `LLM_MODEL`)
+
+| Target | `LLM_MODEL` | `LLM_BASE_URL` | Key |
+|---|---|---|---|
+| Anthropic (default, preserves current behavior) | `anthropic/claude-sonnet-4-6` | — | `ANTHROPIC_API_KEY` |
+| OpenAI | `openai/gpt-4o` (or current) | — | `OPENAI_API_KEY` |
+| vLLM / OpenAI-compatible server | `openai/<served-model-name>` | `http://host:8000/v1` | dummy/none |
+| Ollama (local OSS) | `ollama_chat/llama3.1` | `http://localhost:11434` | none |
+
+### Risk to verify during implementation
+
+- **`num_retries` on the async path:** the input-params docs confirm `num_retries` for `completion()` but don't *explicitly* confirm it for `acompletion()`, and there is prior bug history (BerriAI/litellm#12830). **Plan must include a test that asserts LLM-level retries actually fire** against a mocked `acompletion` that raises a transient error then succeeds. If `num_retries` proves unreliable on the pinned version, fall back to wrapping the provider call in our own retry (reuse the transient classifier from `infra/retry.py`) or a LiteLLM `Router`. This keeps reliability guaranteed in our code, not assumed from the dependency — consistent with the bounded-agency philosophy.
