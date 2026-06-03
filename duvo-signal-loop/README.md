@@ -128,7 +128,7 @@ All have sane defaults:
 |---|---|---|
 | `MAX_CONCURRENT_ACCOUNTS` | `5` | Account-level concurrency cap (semaphore bound) |
 | `HTTP_TIMEOUT_SECONDS` | `30` | Per write-back HTTP request timeout |
-| `ANTHROPIC_TIMEOUT_SECONDS` | `120` | Per Anthropic model-call timeout |
+| `ANTHROPIC_TIMEOUT_SECONDS` | `120` | Per LLM model-call timeout (passed to LiteLLM) |
 | `ACCOUNT_TIMEOUT_SECONDS` | `300` | Wall-clock timeout per account (stops one hung account stalling the batch) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
 
@@ -147,7 +147,7 @@ Run with `uv run` (dependencies are automatically in scope) or after activating 
 | `uv run python main.py --test-email you@example.com` | Use your own inbox for the queued outreach lead (overrides `TEST_EMAIL`) |
 | `uv run python main.py --log-level DEBUG` | Verbose logs (every turn, tool call, and guard decision) |
 
-> ⚠️ **Note:** even `--dry-run` makes **real** Exa + Anthropic calls (only the write-backs are simulated), so it needs valid `EXA_API_KEY` and `ANTHROPIC_API_KEY`.
+> ⚠️ **Note:** even `--dry-run` makes **real** Exa + LLM calls (only the write-backs are simulated), so it needs a valid `EXA_API_KEY` plus the key for your `LLM_MODEL` (`ANTHROPIC_API_KEY` by default).
 
 ---
 
@@ -171,7 +171,7 @@ Every module logs through a single `duvo.*` logger tree configured by `duvo.infr
 
 ## 🧪 Tests
 
-Built test-first and runs **fully offline** — every external dependency (Anthropic, Exa, and all HTTP write-backs) is mocked, so the suite needs no API keys and makes no network calls.
+Built test-first and runs **fully offline** — every external dependency (the LLM provider via `litellm.acompletion`, Exa, and all HTTP write-backs) is mocked, so the suite needs no API keys and makes no network calls.
 
 ```bash
 # Run tests with uv
@@ -213,10 +213,11 @@ Coverage includes:
 
 ## 🏭 Production notes
 
-- **Bounded concurrency** — `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)` prevents thundering-herd against Anthropic/Exa rate limits; tune via env var or `--concurrency`.
+- **Bounded concurrency** — `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)` prevents thundering-herd against the LLM/Exa rate limits; tune via env var or `--concurrency`.
 - **Pooled async HTTP client** — one `httpx.AsyncClient` with `HTTP_TIMEOUT_SECONDS` timeout shared across all write-backs; gracefully closed in the orchestrator `finally`.
 - **Per-account isolation** — a failed account (network error, model/account timeout, bad JSON) is logged and excluded from the report; it never cancels other accounts or raises out of `run()`.
-- **Next steps** — per-account retry with exponential back-off · Anthropic rate-limit handling · structured CRM dedup (upsert on domain) · score-diff alerting on re-runs.
+- **Transient-failure retries** — write-back HTTP calls retry on 408/425/429/5xx with capped exponential backoff + jitter (`HTTP_MAX_RETRIES`); LLM calls retry via LiteLLM's `num_retries` (`LLM_MAX_RETRIES`).
+- **Next steps** — structured CRM dedup (upsert on domain) · score-diff alerting on re-runs · durable run-state for resumability.
 
 ---
 
@@ -238,7 +239,8 @@ duvo-signal-loop/
 │   ├── orchestrator.py         # async orchestrator: semaphore-bounded gather → report
 │   ├── infra/                  # cross-cutting infrastructure
 │   │   ├── logging_setup.py    # central duvo.* logger
-│   │   └── http_client.py      # shared pooled httpx.AsyncClient — get_client() + async aclose()
+│   │   ├── http_client.py      # shared pooled httpx.AsyncClient — get_client() + async aclose()
+│   │   └── retry.py            # with_retries() — transient-failure retry w/ backoff for write-backs
 │   ├── tools/
 │   │   └── exa_tool.py         # exa_search tool (asyncio.to_thread for sync exa-py)
 │   ├── agents/
@@ -249,11 +251,12 @@ duvo-signal-loop/
 │   │       ├── scout.md / analyst.md / router.md
 │   │       └── __init__.py     # load_prompt(name, **params) — reads <name>.md, fills {placeholders}
 │   ├── writeback/
-│   │   ├── crm.py              # async CRM dispatcher (attio | hubspot)
-│   │   ├── attio.py / hubspot.py
+│   │   ├── base.py / registry.py   # CRM/Outreach Protocols + @register_crm/@register_outreach registry
+│   │   ├── crm.py              # async CRM dispatcher → registry (attio | hubspot)
+│   │   ├── attio.py / hubspot.py   # @register_crm adapters (with_retries on every POST)
 │   │   ├── slack.py            # async Tier-1 #sales alert
-│   │   ├── outreach.py         # async outreach dispatcher (brevo | lemlist)
-│   │   └── brevo.py / lemlist.py
+│   │   ├── outreach.py         # async outreach dispatcher → registry (brevo | lemlist)
+│   │   └── brevo.py / lemlist.py   # @register_outreach adapters
 │   └── reporting/
 │       ├── reporter.py         # sync HTML audit report (pure CPU/file — no async needed)
 │       └── templates/report.html
