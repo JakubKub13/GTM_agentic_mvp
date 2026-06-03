@@ -45,7 +45,7 @@ flowchart LR
     PIPE --> REP[📊 HTML report]
 ```
 
-Every agent runs on one shared async tool-use loop (`duvo.agent_core.run_agent`) backed by an **`AsyncAnthropic`** client. Write-backs (`crm`, `slack`, `outreach`) share a single **`httpx.AsyncClient`** via `duvo.infra.http_client.get_client()` — one connection pool for the whole process. `duvo.orchestrator` only orchestrates the hand-offs (reached through the thin `main.py` entry shim).
+Every agent runs on one shared async tool-use loop (`duvo.agent_core.run_agent`) backed by a **pluggable LLM provider** (LiteLLM by default — Anthropic, OpenAI, or a local model, selected via `LLM_MODEL`); only `duvo/llm/litellm_provider.py` touches the wire format. Write-backs (`crm`, `slack`, `outreach`) share a single **`httpx.AsyncClient`** via `duvo.infra.http_client.get_client()` — one connection pool for the whole process. `duvo.orchestrator` only orchestrates the hand-offs (reached through the thin `main.py` entry shim).
 
 ---
 
@@ -233,7 +233,8 @@ duvo-signal-loop/
 ├── duvo/                       # application package (mirrors the duvo.* logger tree)
 │   ├── config.py               # env + model + constants (concurrency + HTTP/Anthropic/account timeouts)
 │   ├── models.py               # Pydantic contract shared across agents
-│   ├── agent_core.py           # async run_agent() tool-use loop (AsyncAnthropic client)
+│   ├── agent_core.py           # async run_agent() tool-use loop (provider-neutral)
+│   ├── llm/                     # LLM seam: neutral types + registry + LiteLLM provider
 │   ├── orchestrator.py         # async orchestrator: semaphore-bounded gather → report
 │   ├── infra/                  # cross-cutting infrastructure
 │   │   ├── logging_setup.py    # central duvo.* logger

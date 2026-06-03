@@ -13,7 +13,10 @@ from duvo.tools.exa_tool import EXA_SEARCH_TOOL, exa_search
 
 _log = get_logger(__name__)
 
-BEATS = [
+# The four signal beats; the key matches Signal.signal_type's Literal type.
+BeatKey = Literal["erp_migration", "hiring", "ma_leadership", "pain"]
+
+BEATS: list[tuple[BeatKey, str]] = [
     (
         "erp_migration",
         "ERP / supply-chain / finance software migrations and implementations "
@@ -70,7 +73,7 @@ SUBMIT_TOOL = tool_schema(
 
 async def run_scout(
     company: Company,
-    beat_key: Literal["erp_migration", "hiring", "ma_leadership", "pain"],
+    beat_key: BeatKey,
     beat_desc: str,
     log=None,
 ) -> list[Signal]:
@@ -134,7 +137,7 @@ async def run_scout(
 
 async def _run_scout_safe(
     company: Company,
-    beat_key: Literal["erp_migration", "hiring", "ma_leadership", "pain"],
+    beat_key: BeatKey,
     beat_desc: str,
     log=None,
 ) -> list[Signal]:

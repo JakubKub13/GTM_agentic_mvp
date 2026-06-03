@@ -1,4 +1,5 @@
 """Tests for main.py — orchestrator: load_companies + async run."""
+
 import asyncio
 import csv
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -9,6 +10,7 @@ from tests.conftest import make_score
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_signal() -> Signal:
     return Signal(
@@ -46,15 +48,29 @@ def _write_csv(path, rows: list[dict]) -> None:
 # load_companies tests (stay sync — load_companies is a sync function)
 # ---------------------------------------------------------------------------
 
+
 class TestLoadCompanies:
     def test_parses_csv_correctly(self, tmp_path):
         from duvo.orchestrator import load_companies
 
         csv_path = str(tmp_path / "test_companies.csv")
-        _write_csv(csv_path, [
-            {"name": "Acme Corp", "domain": "acme.com", "country": "US", "description": "Acme desc"},
-            {"name": "Beta Ltd", "domain": "beta.com", "country": "UK", "description": "Beta desc"},
-        ])
+        _write_csv(
+            csv_path,
+            [
+                {
+                    "name": "Acme Corp",
+                    "domain": "acme.com",
+                    "country": "US",
+                    "description": "Acme desc",
+                },
+                {
+                    "name": "Beta Ltd",
+                    "domain": "beta.com",
+                    "country": "UK",
+                    "description": "Beta desc",
+                },
+            ],
+        )
 
         companies = load_companies(csv_path)
 
@@ -76,9 +92,12 @@ class TestLoadCompanies:
         from duvo.orchestrator import load_companies
 
         csv_path = str(tmp_path / "c.csv")
-        _write_csv(csv_path, [
-            {"name": "X Corp", "domain": "x.com", "country": "DE", "description": ""},
-        ])
+        _write_csv(
+            csv_path,
+            [
+                {"name": "X Corp", "domain": "x.com", "country": "DE", "description": ""},
+            ],
+        )
         companies = load_companies(csv_path)
         assert all(isinstance(c, Company) for c in companies)
 
@@ -360,11 +379,11 @@ class TestRun:
         from duvo.orchestrator import run
 
         captured_values: list[int] = []
-        real_Semaphore = asyncio.Semaphore
+        real_semaphore = asyncio.Semaphore
 
-        def fake_Semaphore(value: int):
+        def fake_semaphore(value: int):
             captured_values.append(value)
-            return real_Semaphore(value)
+            return real_semaphore(value)
 
         mocks = _base_patches()
         with (
@@ -374,7 +393,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
             patch("duvo.infra.http_client.aclose", mocks["aclose"]),
-            patch(f"{PATCH_BASE}.asyncio.Semaphore", fake_Semaphore),
+            patch(f"{PATCH_BASE}.asyncio.Semaphore", fake_semaphore),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None, concurrency=7)
 
@@ -386,11 +405,11 @@ class TestRun:
         from duvo.orchestrator import run
 
         captured_values: list[int] = []
-        real_Semaphore = asyncio.Semaphore
+        real_semaphore = asyncio.Semaphore
 
-        def fake_Semaphore(value: int):
+        def fake_semaphore(value: int):
             captured_values.append(value)
-            return real_Semaphore(value)
+            return real_semaphore(value)
 
         mocks = _base_patches()
         with (
@@ -400,7 +419,7 @@ class TestRun:
             patch(f"{PATCH_BASE}.run_router", mocks["router"]),
             patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
             patch("duvo.infra.http_client.aclose", mocks["aclose"]),
-            patch(f"{PATCH_BASE}.asyncio.Semaphore", fake_Semaphore),
+            patch(f"{PATCH_BASE}.asyncio.Semaphore", fake_semaphore),
         ):
             await run(dry_run=False, test_email="test@test.com", limit=None, concurrency=None)
 
@@ -427,7 +446,9 @@ class TestRun:
 
         mock_load = MagicMock(return_value=companies)
         mock_scout = AsyncMock(side_effect=scout_side_effect)
-        mock_analyst = AsyncMock(side_effect=lambda c, sigs, log=None: make_score(company_name=c.name))
+        mock_analyst = AsyncMock(
+            side_effect=lambda c, sigs, log=None: make_score(company_name=c.name)
+        )
         mock_router = AsyncMock(return_value=None)
         mock_report = MagicMock(return_value="output/run-report.html")
         mock_aclose = AsyncMock(return_value=None)
