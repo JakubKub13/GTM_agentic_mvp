@@ -1,4 +1,5 @@
 """Tests for analyst.py — fully mocked, no real Anthropic/Exa calls."""
+import json
 from unittest.mock import patch
 
 from duvo.agents.analyst import apply_guards, run_analyst
@@ -463,3 +464,35 @@ class TestApplyGuards:
         # No dated → confidence=low, needs_human_research=True, score(9) capped to 6 → Tier 2
         assert result.tier == "Tier 2"
         assert result.score == 6
+
+
+# ---------------------------------------------------------------------------
+# Outreach defensive coercion — the model sometimes returns `outreach` as a
+# JSON *string* instead of a nested object (seen live: Rohlik, Garage Startup).
+# Per "defensive coercion over trust", parse the string so a confident Tier-1
+# still gets a real draft instead of an empty fallback.
+# ---------------------------------------------------------------------------
+
+class TestOutreachStringCoercion:
+    async def test_outreach_json_string_is_parsed_into_draft(self):
+        """`outreach` returned as a JSON string is json.loads-ed into a real draft."""
+        company = _make_company()
+        signals = [_make_signal()]
+        assessment = {**VALID_ASSESSMENT, "outreach": json.dumps(VALID_ASSESSMENT["outreach"])}
+        fake = _make_fake_run_agent(assessment)
+        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+            result = await run_analyst(company, signals)
+        assert isinstance(result.outreach, OutreachDraft)
+        assert result.outreach.subject == "Automating your SAP go-live"
+        assert result.outreach.first_line == "Saw you're migrating to SAP S/4HANA."
+
+    async def test_unparseable_outreach_string_falls_back_to_empty(self):
+        """A non-JSON outreach string still degrades safely to an empty draft."""
+        company = _make_company()
+        signals = [_make_signal()]
+        assessment = {**VALID_ASSESSMENT, "outreach": "not json at all {{{"}
+        fake = _make_fake_run_agent(assessment)
+        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+            result = await run_analyst(company, signals)
+        assert isinstance(result.outreach, OutreachDraft)
+        assert result.outreach.subject == ""

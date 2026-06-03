@@ -182,6 +182,13 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
         captured["confidence"] = "low"
 
     outreach_raw = captured.pop("outreach", {})
+    # The model sometimes returns the nested outreach object as a JSON *string*
+    # rather than a mapping; parse it before construction (defensive coercion).
+    if isinstance(outreach_raw, str):
+        try:
+            outreach_raw = json.loads(outreach_raw)
+        except (json.JSONDecodeError, TypeError):
+            outreach_raw = {}
     try:
         outreach = OutreachDraft(**outreach_raw)
     except Exception as exc:
