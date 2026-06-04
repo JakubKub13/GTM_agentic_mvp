@@ -9,6 +9,7 @@ import inspect
 from collections.abc import Callable
 
 from duvo.config import LLM_MODEL, LLM_PROVIDER
+from duvo.infra import tracing
 from duvo.infra.logging_setup import get_logger
 from duvo.llm.base import LLMRequest, Message, ToolSpec
 from duvo.llm.registry import get_llm_provider
@@ -62,7 +63,20 @@ async def run_agent(
             tools=tools,
             max_tokens=max_tokens,
         )
-        response = await provider.complete(request)
+        with tracing.span(
+            name=f"💬 turn-{turn + 1}",
+            as_type="generation",
+            model=LLM_MODEL,
+            model_parameters={"max_tokens": max_tokens},
+            input=[{"role": m.role, "content": m.content} for m in messages],
+        ) as gen:
+            response = await provider.complete(request)
+            if gen is not None:
+                gen.update(
+                    output=response.message.content,
+                    usage_details=response.usage,
+                    cost_details=({"total": response.cost_usd} if response.cost_usd is not None else None),
+                )
         messages.append(response.message)
 
         if not response.tool_calls:
@@ -75,17 +89,29 @@ async def run_agent(
             if log is not None:
                 log.append(f"{tc.name}({_short(tc.arguments)})")
 
-            if tc.name not in impls:
-                _log.warning("model called unknown tool: %s", tc.name)
-                output = f"unknown tool: {tc.name}"
-            else:
-                try:
-                    output = impls[tc.name](**tc.arguments)
-                    if inspect.isawaitable(output):
-                        output = await output
-                except Exception as exc:
-                    _log.warning("tool %s raised: %s", tc.name, exc)
-                    output = f"tool error: {exc}"
+            as_type, emoji = tracing.obs_for(tc.name)
+            with tracing.span(
+                name=f"{emoji} {tc.name}",
+                as_type=as_type,
+                input=tc.arguments,
+            ) as tsp:
+                if tc.name not in impls:
+                    _log.warning("model called unknown tool: %s", tc.name)
+                    output = f"unknown tool: {tc.name}"
+                    if tsp is not None:
+                        tsp.update(output=output, level="WARNING")
+                else:
+                    try:
+                        output = impls[tc.name](**tc.arguments)
+                        if inspect.isawaitable(output):
+                            output = await output
+                        if tsp is not None:
+                            tsp.update(output=str(output))
+                    except Exception as exc:
+                        _log.warning("tool %s raised: %s", tc.name, exc)
+                        output = f"tool error: {exc}"
+                        if tsp is not None:
+                            tsp.update(output=output, level="ERROR", status_message=str(exc))
 
             messages.append(
                 Message(

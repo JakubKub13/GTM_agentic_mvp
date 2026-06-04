@@ -1,6 +1,7 @@
 """Tests for agent_core.run_agent — the provider-driven tool-use loop (async)."""
 
 import inspect
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from tests.conftest import FakeLLMProvider, make_llm_response, make_tool_call
@@ -264,3 +265,48 @@ class TestShortHelper:
         from duvo.agent_core import _short
 
         assert isinstance(_short("not a dict"), str)
+
+
+class _SpyTracing:
+    """Stand-in for duvo.agent_core.tracing that records every span() call."""
+
+    def __init__(self):
+        self.spans = []
+
+    def obs_for(self, tool_name):
+        return ({"exa_search": "retriever"}.get(tool_name, "tool"), "🔧")
+
+    @contextmanager
+    def span(self, **kwargs):
+        self.spans.append(kwargs)
+
+        class _Rec:
+            def update(self, **kw):
+                pass
+
+        yield _Rec()
+
+
+class TestRunAgentTracing:
+    async def test_generation_and_tool_spans_are_created(self):
+        provider = FakeLLMProvider(
+            [
+                make_llm_response(
+                    tool_calls=[make_tool_call("exa_search", {"query": "q"}, "tu-1")],
+                    stop_reason="tool_calls",
+                ),
+                make_llm_response(content="final"),
+            ]
+        )
+        spy = _SpyTracing()
+        with _patch_provider(provider), patch("duvo.agent_core.tracing", spy):
+            from duvo.agent_core import run_agent
+
+            await run_agent("sys", "go", [], impls={"exa_search": lambda query: "r"})
+
+        as_types = [s["as_type"] for s in spy.spans]
+        assert "generation" in as_types  # at least one model call span
+        # the exa_search tool dispatch became a retriever span with the emoji-prefixed name
+        retriever_spans = [s for s in spy.spans if s["as_type"] == "retriever"]
+        assert len(retriever_spans) == 1
+        assert "exa_search" in retriever_spans[0]["name"]
