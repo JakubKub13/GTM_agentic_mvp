@@ -1,0 +1,10 @@
+# Project-scoped Codex config for duvo-signal-loop.
+# Langfuse MCP via a stdio bridge (mcp-remote), because Codex's native
+# streamable-HTTP client can't talk to the Langfuse MCP server.
+# The wrapper script reads the Basic credential from .env — no secret here.
+
+[mcp_servers.langfuse]
+command = "/Users/phantomghost/Desktop/GTM-duvo/duvo-signal-loop/.codex/langfuse-mcp.sh"
+args = []
+startup_timeout_sec = 60
+tool_timeout_sec = 120
