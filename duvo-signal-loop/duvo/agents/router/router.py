@@ -57,7 +57,9 @@ async def run_router(
         input=user,
         metadata={"company": s.company_name, "tier": s.tier, "confident_t1": confident_t1},
     ) as agent_span:
-        await run_agent(ROUTER_SYSTEM, user, tools, impls, max_turns=6, final_tools={"finish"}, log=log)
+        await run_agent(
+            ROUTER_SYSTEM, user, tools, impls, max_turns=6, final_tools={"finish"}, log=log
+        )
         if agent_span is not None:
             agent_span.update(
                 output={

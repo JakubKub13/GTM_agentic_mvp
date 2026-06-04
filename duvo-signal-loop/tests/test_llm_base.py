@@ -48,7 +48,9 @@ def test_llmrequest_and_response_shapes():
 def test_llm_response_usage_and_cost_default_none():
     from duvo.llm.base import LLMResponse, Message
 
-    resp = LLMResponse(message=Message(role="assistant", content="x"), tool_calls=[], stop_reason="stop")
+    resp = LLMResponse(
+        message=Message(role="assistant", content="x"), tool_calls=[], stop_reason="stop"
+    )
     assert resp.usage is None
     assert resp.cost_usd is None
 

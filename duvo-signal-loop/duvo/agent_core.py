@@ -75,7 +75,9 @@ async def run_agent(
                 gen.update(
                     output=response.message.content,
                     usage_details=response.usage,
-                    cost_details=({"total": response.cost_usd} if response.cost_usd is not None else None),
+                    cost_details=(
+                        {"total": response.cost_usd} if response.cost_usd is not None else None
+                    ),
                 )
         messages.append(response.message)
 

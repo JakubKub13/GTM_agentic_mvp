@@ -82,7 +82,9 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
             )
             result = conservative_default(company)
             if agent_span is not None:
-                agent_span.update(output={"score": result.score, "tier": result.tier, "fallback": True})
+                agent_span.update(
+                    output={"score": result.score, "tier": result.tier, "fallback": True}
+                )
             return result
 
         score = score_from_assessment_payload(company, captured)
