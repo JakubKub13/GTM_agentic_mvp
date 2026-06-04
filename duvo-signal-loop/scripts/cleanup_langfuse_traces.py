@@ -29,15 +29,15 @@ _PAGE_LIMIT = 100
 _DELETE_BATCH = 100
 
 
-def _list_trace_ids(client: httpx.Client, name: str) -> list[str]:
-    """Return all trace ids whose name matches ``name`` (paginated)."""
+def _list_trace_ids(client: httpx.Client, name: str | None) -> list[str]:
+    """Return trace ids (paginated). Filters by ``name`` unless it is ``None`` (all)."""
     ids: list[str] = []
     page = 1
     while True:
-        resp = client.get(
-            "/api/public/traces",
-            params={"name": name, "page": page, "limit": _PAGE_LIMIT},
-        )
+        params: dict[str, str | int] = {"page": page, "limit": _PAGE_LIMIT}
+        if name is not None:
+            params["name"] = name
+        resp = client.get("/api/public/traces", params=params)
         resp.raise_for_status()
         data = resp.json().get("data", [])
         if not data:
@@ -58,8 +58,11 @@ def _delete_trace_ids(client: httpx.Client, ids: list[str]) -> None:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Delete Langfuse traces by name.")
+    parser = argparse.ArgumentParser(description="Delete Langfuse traces by name (or all).")
     parser.add_argument("--name", default="probe", help="Trace name to match (default: probe).")
+    parser.add_argument(
+        "--all", action="store_true", help="Delete ALL traces in the project (ignores --name)."
+    )
     parser.add_argument(
         "--dry-run", action="store_true", help="List matching traces without deleting."
     )
@@ -69,13 +72,16 @@ def main() -> int:
         print("LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY not set — nothing to do.", file=sys.stderr)
         return 1
 
+    name = None if args.all else args.name
+    scope = "ALL" if args.all else repr(name)
+
     with httpx.Client(
         base_url=config.LANGFUSE_HOST.rstrip("/"),
         auth=(config.LANGFUSE_PUBLIC_KEY, config.LANGFUSE_SECRET_KEY),
         timeout=30.0,
     ) as client:
-        ids = _list_trace_ids(client, args.name)
-        print(f"Found {len(ids)} trace(s) named {args.name!r} on {config.LANGFUSE_HOST}.")
+        ids = _list_trace_ids(client, name)
+        print(f"Found {len(ids)} trace(s) [{scope}] on {config.LANGFUSE_HOST}.")
         if not ids:
             return 0
         if args.dry_run:
@@ -84,7 +90,7 @@ def main() -> int:
             print("Dry run — nothing deleted. Re-run without --dry-run to delete.")
             return 0
         _delete_trace_ids(client, ids)
-        print(f"Deleted {len(ids)} trace(s) named {args.name!r}.")
+        print(f"Deleted {len(ids)} trace(s) [{scope}] (Langfuse processes deletions async).")
     return 0
 
 
