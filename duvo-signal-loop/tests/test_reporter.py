@@ -222,3 +222,38 @@ class TestAutoescape:
         # Escaped versions must appear
         assert "A &amp; B" in html
         assert "&lt;X&gt;" in html
+
+
+# ---------------------------------------------------------------------------
+# Run-scoped path tests
+# ---------------------------------------------------------------------------
+
+
+class TestRunScopedPath:
+    def test_run_id_builds_run_reports_path_and_renders_id(self, tmp_path, monkeypatch):
+        from duvo.reporting.reporter import generate_report
+
+        monkeypatch.chdir(tmp_path)
+        returned = generate_report([_make_result()], run_id="abc123", run_date="2026-06-04")
+
+        assert returned == "output/run_reports/2026-06-04_abc123-run-report.html"
+        assert os.path.isfile(tmp_path / returned)
+        assert "abc123" in open(tmp_path / returned, encoding="utf-8").read()
+
+    def test_run_id_without_run_date_uses_id_only(self, tmp_path, monkeypatch):
+        from duvo.reporting.reporter import generate_report
+
+        monkeypatch.chdir(tmp_path)
+        returned = generate_report([_make_result()], run_id="abc123")
+
+        assert returned == "output/run_reports/abc123-run-report.html"
+        assert os.path.isfile(tmp_path / returned)
+
+    def test_no_run_id_falls_back_to_default_path(self, tmp_path, monkeypatch):
+        from duvo.reporting.reporter import generate_report
+
+        monkeypatch.chdir(tmp_path)
+        returned = generate_report([_make_result()])
+
+        assert returned == "output/run-report.html"
+        assert os.path.isfile(tmp_path / returned)

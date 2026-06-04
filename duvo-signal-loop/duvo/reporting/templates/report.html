@@ -18,7 +18,8 @@
  code{background:#0f1115;padding:1px 5px;border-radius:4px}
 </style></head><body>
 <header><h1>duvo-signal-loop — agent run report</h1>
-<div class="sub">{{ results|length }} accounts · scouts → analyst → router · audit log only</div></header>
+<div class="sub">{{ results|length }} accounts · scouts → analyst → router · audit log only</div>
+{% if run_id %}<div class="sub">run <code>{{ run_id }}</code> · matches Langfuse session / batch_run_id</div>{% endif %}</header>
 {% for r in results %}{% set s = r.score %}
 <div class="card">
  <div class="top">
