@@ -2,6 +2,7 @@
 
 import asyncio
 import csv
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from duvo.models import Company, RunResult, Signal
@@ -138,6 +139,38 @@ def _base_patches(companies: list[Company] | None = None):
     }
 
 
+class _SpyTracing:
+    """Stand-in for duvo.orchestrator.tracing that records span/trace_context calls."""
+
+    def __init__(self):
+        self.spans = []
+        self.trace_contexts = []
+
+    def init_tracing(self):
+        pass
+
+    def flush(self):
+        pass
+
+    def obs_for(self, tool_name):
+        return ("tool", "🔧")
+
+    @contextmanager
+    def span(self, **kwargs):
+        self.spans.append(kwargs)
+
+        class _Rec:
+            def update(self, **kw):
+                pass
+
+        yield _Rec()
+
+    @contextmanager
+    def trace_context(self, **kwargs):
+        self.trace_contexts.append(kwargs)
+        yield None
+
+
 class TestRun:
     """Test the async orchestrator run() with all external calls patched."""
 
@@ -158,6 +191,38 @@ class TestRun:
         assert mocks["scout"].call_count == 2
         assert mocks["analyst"].call_count == 2
         assert mocks["router"].call_count == 2
+
+    async def test_run_opens_single_batch_chain_span(self):
+        from duvo.orchestrator import run
+
+        mocks = _base_patches()
+        spy = _SpyTracing()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
+            patch(f"{PATCH_BASE}.tracing", spy),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None)
+
+        # Exactly one batch-level run span (chain) wrapping the gather.
+        run_spans = [
+            s
+            for s in spy.spans
+            if s.get("as_type") == "chain" and s.get("name", "").startswith("🚀 run ")
+        ]
+        assert len(run_spans) == 1
+        # One account-run chain span per company, nested under it.
+        account_spans = [s for s in spy.spans if s.get("name") == "🎯 account-run"]
+        assert len(account_spans) == 2
+        # Session/tags propagated once at batch level; session_id == the run id.
+        assert len(spy.trace_contexts) == 1
+        tc = spy.trace_contexts[0]
+        assert "duvo-signal-loop" in tc["tags"]
+        assert tc["session_id"] == tc["metadata"]["batch_run_id"]
 
     async def test_limit_is_respected(self):
         from duvo.orchestrator import run

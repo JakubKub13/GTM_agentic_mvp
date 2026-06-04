@@ -2,7 +2,33 @@
 
 from unittest.mock import AsyncMock, MagicMock
 
+import pytest
+
 from duvo.models import ICPScore, OutreachDraft
+
+
+@pytest.fixture(autouse=True)
+def _offline_tracing(monkeypatch):
+    """Keep the suite offline and deterministic regardless of the developer's ``.env``.
+
+    Two guarantees:
+
+    * **Tracing OFF.** Force ``LANGFUSE_ENABLED=False`` and reset the module-global
+      ``tracing._client`` before/after each test, so any ``init_tracing()`` call
+      degrades to a no-op and never builds a live client or pollutes later tests.
+      Tests that exercise the enabled path set ``tracing._client`` directly.
+    * **No live ``.env`` re-read.** Stub ``dotenv.load_dotenv`` to a no-op so the
+      ``importlib.reload(config)`` used by config tests reads only ``os.environ``
+      (values loaded at startup persist; vars a test ``delenv``-s stay absent).
+    """
+    from duvo import config
+    from duvo.infra import tracing
+
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: False, raising=False)
+    monkeypatch.setattr(config, "LANGFUSE_ENABLED", False, raising=False)
+    tracing._client = None
+    yield
+    tracing._client = None
 
 
 def _fake_response(status_code: int, json_data: dict | None = None, raise_on_raise: bool = False):
