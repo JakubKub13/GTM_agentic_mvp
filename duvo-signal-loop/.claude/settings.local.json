@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__langfuse"
+    ],
+    "deny": [
+      "mcp__langfuse__createTextPrompt",
+      "mcp__langfuse__createChatPrompt",
+      "mcp__langfuse__updatePromptLabels",
+      "mcp__langfuse__createScore",
+      "mcp__langfuse__createScoreConfig",
+      "mcp__langfuse__updateScoreConfig",
+      "mcp__langfuse__deleteScoreConfig",
+      "mcp__langfuse__upsertDataset",
+      "mcp__langfuse__upsertDatasetItem",
+      "mcp__langfuse__deleteDatasetItem",
+      "mcp__langfuse__createDatasetRunItem",
+      "mcp__langfuse__deleteDatasetRun",
+      "mcp__langfuse__createAnnotationQueue",
+      "mcp__langfuse__createAnnotationQueueItem",
+      "mcp__langfuse__updateAnnotationQueueItem",
+      "mcp__langfuse__deleteAnnotationQueueItem",
+      "mcp__langfuse__createAnnotationQueueAssignment",
+      "mcp__langfuse__deleteAnnotationQueueAssignment",
+      "mcp__langfuse__createComment",
+      "mcp__langfuse__createModel",
+      "mcp__langfuse__deleteModel"
+    ]
+  }
+}
