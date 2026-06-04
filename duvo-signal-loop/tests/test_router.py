@@ -11,6 +11,7 @@ All tests calling run_router are async (pytest-asyncio auto mode).
 from __future__ import annotations
 
 import sys
+from contextlib import contextmanager
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -707,3 +708,39 @@ class TestUserMessage:
             "angle",
         ):
             assert key in data, f"Missing key: {key}"
+
+
+# ---------------------------------------------------------------------------
+# TestRouterAgentSpan — tracing parity with TestAnalystGuardrailSpan
+# ---------------------------------------------------------------------------
+
+
+class _SpyTracing:
+    def __init__(self):
+        self.spans = []
+
+    @contextmanager
+    def span(self, **kwargs):
+        self.spans.append(kwargs)
+
+        class _Rec:
+            def update(self, **kw):
+                pass
+
+        yield _Rec()
+
+
+class TestRouterAgentSpan:
+    async def test_run_router_wrapped_in_agent_span(self):
+        rr = _make_run_result(tier="Tier 1", needs_human_research=False)
+        spy = _SpyTracing()
+        with (
+            patch(
+                "duvo.agents.router.router.run_agent",
+                side_effect=_fake_run_agent_factory(["finish"]),
+            ),
+            patch("duvo.agents.router.router.tracing", spy),
+        ):
+            await router.run_router(rr, dry_run=True)
+        as_types = [s.get("as_type") for s in spy.spans]
+        assert "agent" in as_types

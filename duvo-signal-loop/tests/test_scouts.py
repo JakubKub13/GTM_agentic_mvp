@@ -1,5 +1,6 @@
 """Tests for scouts.py — fully mocked, no real Anthropic/Exa calls."""
 
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from duvo.agents.scouts import run_scout, scout_all
@@ -268,3 +269,39 @@ class TestScoutAll:
         signal_types = {s.signal_type for s in signals}
         assert "erp_migration" not in signal_types
         assert signal_types == {"hiring", "ma_leadership", "pain"}
+
+
+# ---------------------------------------------------------------------------
+# TestScoutAgentSpan — tracing parity with TestAnalystGuardrailSpan
+# ---------------------------------------------------------------------------
+
+
+class _SpyTracing:
+    def __init__(self):
+        self.spans = []
+
+    @contextmanager
+    def span(self, **kwargs):
+        self.spans.append(kwargs)
+
+        class _Rec:
+            def update(self, **kw):
+                pass
+
+        yield _Rec()
+
+
+class TestScoutAgentSpan:
+    async def test_run_scout_wrapped_in_agent_span(self):
+        company = _make_company()
+        fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
+        spy = _SpyTracing()
+        with (
+            patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake),
+            patch("duvo.agents.scouts.scouts.tracing", spy),
+        ):
+            await run_scout(company, "erp_migration", "ERP beat desc")
+        as_types = [s.get("as_type") for s in spy.spans]
+        assert "agent" in as_types
+        names = [s.get("name") for s in spy.spans]
+        assert any("erp_migration" in (n or "") for n in names)

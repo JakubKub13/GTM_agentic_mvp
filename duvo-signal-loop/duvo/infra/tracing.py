@@ -84,17 +84,37 @@ def span(**kwargs: Any):
     Forwards directly to ``langfuse.start_as_current_observation`` (name, as_type,
     input, metadata, model, level, status_message, …). Yields ``None`` when disabled,
     so call sites guard updates with ``if handle is not None: handle.update(...)``.
+    Never raises on enter — degrades to a no-op if the langfuse call fails.
     """
     if _client is None:
         return contextlib.nullcontext()
-    return _client.start_as_current_observation(**kwargs)
+    try:
+        return _client.start_as_current_observation(**kwargs)
+    except Exception as exc:
+        _log.warning("failed to start span %s: %s", kwargs.get("name"), exc)
+        return contextlib.nullcontext()
 
 
 def trace_context(*, session_id: str, tags: list[str], metadata: dict[str, Any]):
-    """Propagate trace-level attributes when enabled, else a no-op context manager."""
+    """Propagate trace-level attributes when enabled, else a no-op context manager.
+
+    ``propagate_attributes`` is a module-level langfuse function (not a client
+    method) and requires string metadata values, so values are coerced to ``str``.
+    Never raises on enter — a tracing failure must not abort the pipeline.
+    """
     if _client is None:
         return contextlib.nullcontext()
-    return _client.propagate_attributes(session_id=session_id, tags=tags, metadata=metadata)
+    try:
+        from langfuse import propagate_attributes
+
+        return propagate_attributes(
+            session_id=session_id,
+            tags=tags,
+            metadata={k: str(v) for k, v in metadata.items()},
+        )
+    except Exception as exc:
+        _log.warning("failed to propagate trace attributes: %s", exc)
+        return contextlib.nullcontext()
 
 
 def flush() -> None:
