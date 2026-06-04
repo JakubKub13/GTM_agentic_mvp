@@ -74,6 +74,40 @@ def _parse_arguments(raw: str | None, tool_name: str) -> dict[str, Any]:
     return args if isinstance(args, dict) else {}
 
 
+def _usage_from_wire(resp: Any) -> dict[str, int] | None:
+    """Map a litellm usage object to neutral {"input","output","total"} (None if absent)."""
+    u = getattr(resp, "usage", None)
+    if u is None:
+        return None
+    out: dict[str, int] = {}
+    pt = getattr(u, "prompt_tokens", None)
+    ct = getattr(u, "completion_tokens", None)
+    tt = getattr(u, "total_tokens", None)
+    if isinstance(pt, int):
+        out["input"] = pt
+    if isinstance(ct, int):
+        out["output"] = ct
+    if isinstance(tt, int):
+        out["total"] = tt
+    return out or None
+
+
+def _cost_from_wire(resp: Any) -> float | None:
+    """Return the call's USD cost from litellm (None if it can't be determined)."""
+    hidden = getattr(resp, "_hidden_params", None)
+    if isinstance(hidden, dict):
+        cost = hidden.get("response_cost")
+        if cost is not None:
+            try:
+                return float(cost)
+            except (TypeError, ValueError):
+                pass
+    try:
+        return float(litellm.completion_cost(completion_response=resp))
+    except Exception:
+        return None
+
+
 def _from_wire_response(resp: Any) -> LLMResponse:
     choice = resp.choices[0]
     msg = choice.message
@@ -88,7 +122,11 @@ def _from_wire_response(resp: Any) -> LLMResponse:
         )
     assistant = Message(role="assistant", content=msg.content or "", tool_calls=tool_calls)
     return LLMResponse(
-        message=assistant, tool_calls=tool_calls, stop_reason=choice.finish_reason or ""
+        message=assistant,
+        tool_calls=tool_calls,
+        stop_reason=choice.finish_reason or "",
+        usage=_usage_from_wire(resp),
+        cost_usd=_cost_from_wire(resp),
     )
 
 

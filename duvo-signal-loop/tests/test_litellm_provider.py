@@ -153,6 +153,29 @@ async def test_custom_base_url_sets_api_base_and_api_key(monkeypatch):
     assert fake.call_args.kwargs["api_key"] == "sk-no-key-required"
 
 
+async def test_usage_extracted_from_wire_response():
+    from types import SimpleNamespace
+
+    resp_obj = _wire_response(content="hi", finish_reason="stop")
+    resp_obj.usage = SimpleNamespace(prompt_tokens=100, completion_tokens=40, total_tokens=140)
+    resp_obj._hidden_params = {"response_cost": 0.0021}
+    req = LLMRequest(model="openai/gpt-4o", system="s", messages=[Message(role="user", content="hi")])
+    with patch("duvo.llm.litellm_provider.litellm.acompletion", AsyncMock(return_value=resp_obj)):
+        resp = await LiteLLMProvider().complete(req)
+    assert resp.usage == {"input": 100, "output": 40, "total": 140}
+    assert resp.cost_usd == 0.0021
+
+
+async def test_missing_usage_and_cost_degrade_to_none():
+    resp_obj = _wire_response(content="hi", finish_reason="stop")  # no .usage, no _hidden_params
+    req = LLMRequest(model="openai/gpt-4o", system="s", messages=[Message(role="user", content="hi")])
+    with patch("duvo.llm.litellm_provider.litellm.acompletion", AsyncMock(return_value=resp_obj)):
+        with patch("duvo.llm.litellm_provider.litellm.completion_cost", side_effect=Exception("no cost")):
+            resp = await LiteLLMProvider().complete(req)
+    assert resp.usage is None
+    assert resp.cost_usd is None
+
+
 async def test_litellm_retries_transient_error(monkeypatch):
     """With acompletion fully mocked, LiteLLM's internal num_retries is bypassed,
     so a transient error surfaces. This documents that our provider does not add
