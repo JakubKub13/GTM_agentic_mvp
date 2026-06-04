@@ -31,6 +31,13 @@ MAX_ANALYST_SEARCHES = 2  # hard cap on analyst verification searches
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
+# Langfuse tracing (OFF by default — keeps --dry-run and the offline test suite key/network-free).
+LANGFUSE_ENABLED = os.environ.get("LANGFUSE_ENABLED", "false").strip().lower() == "true"
+LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "https://cloud.langfuse.com")
+APP_ENV = os.environ.get("APP_ENV", "dev")  # tags + Langfuse environment label
+
 MAX_CONCURRENT_ACCOUNTS = int(
     os.environ.get("MAX_CONCURRENT_ACCOUNTS", "5")
 )  # account-level fan-out cap

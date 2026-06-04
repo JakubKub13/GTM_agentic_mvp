@@ -158,3 +158,49 @@ def test_llm_config_defaults_present():
     assert isinstance(config.HTTP_MAX_RETRIES, int)
     # CLAUDE_MODEL is superseded by LLM_MODEL and must be gone.
     assert not hasattr(config, "CLAUDE_MODEL")
+
+
+class TestLangfuseConfig:
+    """Defaults for the Langfuse tracing config (tracing is OFF unless explicitly enabled)."""
+
+    def test_langfuse_enabled_defaults_false(self, monkeypatch):
+        monkeypatch.delenv("LANGFUSE_ENABLED", raising=False)
+        import importlib
+
+        from duvo import config
+
+        importlib.reload(config)
+        assert config.LANGFUSE_ENABLED is False
+
+    def test_langfuse_enabled_true_only_for_literal_true(self, monkeypatch):
+        monkeypatch.setenv("LANGFUSE_ENABLED", "TRUE")
+        import importlib
+
+        from duvo import config
+
+        importlib.reload(config)
+        assert config.LANGFUSE_ENABLED is True
+
+    def test_langfuse_host_default(self, monkeypatch):
+        monkeypatch.delenv("LANGFUSE_HOST", raising=False)
+        import importlib
+
+        from duvo import config
+
+        importlib.reload(config)
+        assert config.LANGFUSE_HOST == "https://cloud.langfuse.com"
+
+    def test_app_env_default_is_dev(self, monkeypatch):
+        monkeypatch.delenv("APP_ENV", raising=False)
+        import importlib
+
+        from duvo import config
+
+        importlib.reload(config)
+        assert config.APP_ENV == "dev"
+
+    def test_langfuse_keys_default_empty(self):
+        from duvo import config
+
+        assert isinstance(config.LANGFUSE_PUBLIC_KEY, str)
+        assert isinstance(config.LANGFUSE_SECRET_KEY, str)
