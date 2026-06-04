@@ -1,4 +1,4 @@
-"""Credentials + model. Exa + Anthropic always required; write-back keys validated lazily."""
+"""Credentials, provider selection, and runtime limits."""
 
 import os
 

@@ -84,7 +84,7 @@ class TestRunAnalystNormalPath:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(VALID_ASSESSMENT)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result, ICPScore)
 
@@ -92,7 +92,7 @@ class TestRunAnalystNormalPath:
         company = _make_company(name="TestCo", domain="testco.com")
         signals = [_make_signal()]
         fake = _make_fake_run_agent(VALID_ASSESSMENT)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert result.company_name == "TestCo"
         assert result.domain == "testco.com"
@@ -101,7 +101,7 @@ class TestRunAnalystNormalPath:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(VALID_ASSESSMENT)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result.outreach, OutreachDraft)
         assert result.outreach.subject == "Automating your SAP go-live"
@@ -111,7 +111,7 @@ class TestRunAnalystNormalPath:
         company = _make_company()
         signals = [_make_signal(published_date="2024-01-15")]
         fake = _make_fake_run_agent(VALID_ASSESSMENT)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         # After guards: score=8 >=8, not needs_human_research → Tier 1
         assert result.tier == "Tier 1"
@@ -139,7 +139,7 @@ class TestRunAnalystMaxTokens:
             impls["record_assessment"](**VALID_ASSESSMENT)
             return []
 
-        with patch("duvo.agents.analyst.run_agent", side_effect=capturing_run_agent):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=capturing_run_agent):
             await run_analyst(company, signals)
 
         assert captured["max_tokens"] > 2000
@@ -157,7 +157,7 @@ class TestRunAnalystConservativeDefault:
         company = _make_company()
         signals = []
         fake = _make_fake_run_agent(assessment_kwargs=None)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert result.score == 3
         assert result.tier == "Tier 3"
@@ -167,7 +167,7 @@ class TestRunAnalystConservativeDefault:
     async def test_conservative_default_returns_icpscore(self):
         company = _make_company()
         fake = _make_fake_run_agent(assessment_kwargs=None)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, [])
         assert isinstance(result, ICPScore)
 
@@ -185,7 +185,7 @@ class TestScoreClamping:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         # Clamped to 10 — no ValidationError
         assert result.score == 10
@@ -201,7 +201,7 @@ class TestScoreClamping:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         # Clamped to 1, score<5 → Tier 3
         assert result.score == 1
@@ -217,7 +217,7 @@ class TestScoreClamping:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert result.score == 1
 
@@ -226,7 +226,7 @@ class TestScoreClamping:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert result.score == 10
 
@@ -237,7 +237,7 @@ class TestScoreClamping:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result, ICPScore)
         assert 1 <= result.score <= 10
@@ -249,7 +249,7 @@ class TestScoreClamping:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result, ICPScore)
         assert 1 <= result.score <= 10
@@ -277,7 +277,7 @@ class TestTierConfidenceCoercion:
         company = _make_company()
         signals = []  # no signals → guards keep Tier 3
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             # Without coercion this raises ValidationError; coercion must have run.
             result = await run_analyst(company, signals)
         assert result.tier == "Tier 3"
@@ -293,7 +293,7 @@ class TestTierConfidenceCoercion:
         company = _make_company()
         signals = []  # no dated signals → guards enforce low anyway
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             # Without coercion this raises ValidationError; coercion must have run.
             result = await run_analyst(company, signals)
         assert result.confidence == "low"
@@ -316,7 +316,7 @@ class TestPartialAssessmentFallback:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(partial_assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result, ICPScore)
         assert result.score == 3
@@ -347,7 +347,7 @@ class TestOutreachDraftFallback:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(bad_outreach_assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result, ICPScore)
         assert isinstance(result.outreach, OutreachDraft)
@@ -363,7 +363,7 @@ class TestOutreachDraftFallback:
         company = _make_company()
         signals = [_make_signal()]
         fake = _make_fake_run_agent(no_outreach_assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result, ICPScore)
         assert result.outreach.body == ""
@@ -535,7 +535,7 @@ class TestOutreachStringCoercion:
         signals = [_make_signal()]
         assessment = {**VALID_ASSESSMENT, "outreach": json.dumps(VALID_ASSESSMENT["outreach"])}
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result.outreach, OutreachDraft)
         assert result.outreach.subject == "Automating your SAP go-live"
@@ -547,7 +547,7 @@ class TestOutreachStringCoercion:
         signals = [_make_signal()]
         assessment = {**VALID_ASSESSMENT, "outreach": "not json at all {{{"}
         fake = _make_fake_run_agent(assessment)
-        with patch("duvo.agents.analyst.run_agent", side_effect=fake):
+        with patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake):
             result = await run_analyst(company, signals)
         assert isinstance(result.outreach, OutreachDraft)
         assert result.outreach.subject == ""

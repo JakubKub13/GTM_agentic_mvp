@@ -20,8 +20,8 @@ Write code that reads like the file next to it — senior, plain, no speculative
 
 ## Idioms to reuse (don't reinvent)
 
-- **Lazy module-level singleton + `require()` at call time** for any external client, so the module imports without secrets and the key is validated only on real use. Canonical: `infra/http_client.py:get_client`, `agent_core._get_client`, `tools/exa_tool._get_exa`.
-- **Defensive coercion over trust.** Inputs from the LLM or JSON are clamped/coerced before use, with a conservative fallback — never trusted to be in range. Canonical: `agents/analyst.py:run_analyst` (score clamp to 1–10, `_conservative_default`).
+- **Lazy module-level singleton + `require()` at call time** for any external client, so the module imports without secrets and the key is validated only on real use. Canonical: `infra/http_client.py:get_client`, `shared_agentic_tools/exa_tool._get_exa`.
+- **Defensive coercion over trust.** Inputs from the LLM or JSON are clamped/coerced before use, with a conservative fallback — never trusted to be in range. Canonical: `agents/analyst/guards.py:score_from_assessment_payload` (score clamp to 1–10, `_conservative_default`).
 
 ## Anti-bloat
 

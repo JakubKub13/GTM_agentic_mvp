@@ -29,10 +29,11 @@ as a map to verify against the files — if it disagrees with the code, the code
 ## The one idea to hold onto
 
 Everything rests on a single reusable primitive: **`agent_core.run_agent()`**, one
-async Anthropic tool-use loop. Every agent in the system — 4 scouts, 1 analyst, 1
-router — is just a different `(system_prompt, tools, impls)` triple fed into that
-same loop. Per account the flow is **scouts → analyst → router**. The project's
-guiding principle is **bounded agency**: the LLM proposes, but every *consequential*
+async provider-neutral tool-use loop backed by the configured `LLMProvider`
+(LiteLLM by default). Every agent role — 4 scout beats, 1 analyst, 1 router — is
+just a different `(system_prompt, tools, impls)` triple fed into that same loop.
+Per account the flow is **scouts → analyst → router**. The project's guiding
+principle is **bounded agency**: the LLM proposes, but every *consequential*
 decision (scoring, tiering, sending) is pulled out of the model into deterministic,
 testable Python guards. Keep both of those in mind and the rest of the code reads
 as variations on them.
@@ -40,7 +41,7 @@ as variations on them.
 ## Reading order (do this, in this order)
 
 Read bottom-up: contract and runtime first, then the agents that ride on them, then
-orchestration. Each step says *why it comes here* and *what to extract*. Read the
+orchestration. Each step says *why it comes here* and *what to extract*. Open the
 files directly — most are short. The runtime lives under the `duvo/` package; `main.py`
 at the repo root is a thin shim that calls `duvo.orchestrator.main`.
 
@@ -48,36 +49,38 @@ at the repo root is a thin shim that calls `duvo.orchestrator.main`.
    "where agency is bounded" and "where it breaks" sections. Orients you fast.
 2. **`duvo/config.py`** — every env var, the `require()` pattern (required keys raise;
    write-back keys validated lazily so `--dry-run` works without a full `.env`),
-   the hardcoded model, and the concurrency/timeout knobs. *Extract:* what's
-   required vs optional, and the tunable limits.
+   the LLM provider/model selection, and the concurrency/timeout knobs. *Extract:*
+   what's required vs optional, and the tunable limits.
 3. **`duvo/models.py`** — the Pydantic contract shared by all agents. *Extract:* the 4
    signal-type `Literal`s, `ICPScore.score = Field(ge=1, le=10)`, the tier/confidence
    `Literal`s. These constraints are *why* the analyst defends so hard downstream.
 4. **`duvo/agent_core.py`** — the heart. Read `run_agent` line by line. *Extract:* the
    loop (call → dispatch tool_use → feed results → repeat to a final tool or
    `max_turns`); sync/async tool polymorphism via `inspect.isawaitable`; errors
-   and unknown tools become tool_results instead of crashing; the lazy
-   `AsyncAnthropic` singleton; the `log` list that captures every tool call.
+   and unknown tools become tool results instead of crashing; the provider-neutral
+   `LLMRequest`/`Message` boundary and lazy `get_llm_provider()` lookup; the `log`
+   list that captures every tool call.
 5. **`duvo/infra/http_client.py`** + **`duvo/infra/logging_setup.py`** — the shared
    pooled `httpx.AsyncClient` singleton (drained once in the orchestrator's `finally`)
    and the single `duvo.*` logger tree (idempotent, `propagate=False`, secrets never
    logged).
-6. **`duvo/tools/exa_tool.py`** — the one search tool both scouts and analyst use.
-   *Extract:* `exa-py` is sync-only, so it's offloaded via `asyncio.to_thread` to keep
-   the loop responsive; results are formatted to a compact string; failures return a
-   string, not an exception.
-7. **`duvo/agents/scouts.py`** — 4 concurrent scout agents. *Extract:* the 4 `BEATS`
-   (matching the signal `Literal`s), `asyncio.gather` fan-out, `_run_scout_safe`
+6. **`duvo/shared_agentic_tools/exa_tool.py`** — the one search tool both scouts and analyst use.
+   *Extract:* the native `AsyncExa` client is awaited directly to keep the loop responsive;
+   results are formatted to a compact string; failures return a string, not an exception.
+7. **`duvo/agents/scouts/scouts.py`** — 4 concurrent scout agents, with prompt copy in
+   **`duvo/agents/scouts/prompts/scout.md`**. *Extract:* the 4 `BEATS`
+   (matching the signal `Literal`s), `asyncio.gather` fan-out, `run_scout_safe`
    per-beat isolation, the "never invent / sourced only" prompt, and that
    `signal_type` is set by the beat, not the model.
-8. **`duvo/agents/analyst.py`** — the defensive core. *Extract:* the ICP definition;
-   that the model may run verification searches; and especially the two-layer
+8. **`duvo/agents/analyst/analyst.py`** — the defensive core. *Extract:* the ICP definition;
+   prompt copy in **`duvo/agents/analyst/prompts/analyst.md`**; that the model may run verification searches; and especially the two-layer
    defense — (a) per-field coercion/clamping before constructing `ICPScore`, and (b)
    `apply_guards()`, a pure deterministic function that overrides the model's tier and
    caps hallucinated confidence. Read `apply_guards` rules in order; this is half the
    "bounded agency".
-9. **`duvo/agents/router.py`** — the never-send safety layer. *Extract:* `confident_t1`
-   computed in code (not by the model); the self-guarding tools where the safety check
+9. **`duvo/agents/router/router.py`** — the never-send safety layer. *Extract:* `confident_t1`
+   computed in code (not by the model); prompt copy in **`duvo/agents/router/prompts/router.md`**;
+   the self-guarding tools where the safety check
    runs *before* the lazy `import` and any `await`; that nothing is ever auto-sent
    (queue / paused only); and `dry_run` returning `[dry-run] …` strings.
 10. **`duvo/writeback/`** — the pluggable stack. Read `crm.py` and `outreach.py`
@@ -101,14 +104,15 @@ at the repo root is a thin shim that calls `duvo.orchestrator.main`.
 
 You understand the codebase when you can explain, from the code:
 
-- **One runtime, six agents.** How `run_agent` powers scouts, analyst, and router
-  identically, and what each agent's tools and final tool are.
+- **One runtime, three agent roles.** How `run_agent` powers four scout beat runs,
+  the analyst, and the router identically, and what each role's tools and final
+  tool are.
 - **The three deterministic safety gates** and where each lives: scouts can't invent
   (prompt + `source_url` required); `apply_guards()` overrides scoring/tiering; the
   router's tool guards refuse non-confident-Tier-1 *before importing the send module*,
   and nothing auto-sends.
 - **The async isolation layers** stacked so no single failure sinks a run: per-beat
-  (`_run_scout_safe`), per-account (semaphore + timeout + try/except → `None`), pooled
+  (`run_scout_safe`), per-account (semaphore + timeout + try/except → `None`), pooled
   HTTP closed in `finally`, bounded concurrency.
 - **The pluggable seam:** how `CRM_PROVIDER` / `OUTREACH_PROVIDER` swap adapters behind
   one interface, with lazy import and default-fallback.
@@ -117,8 +121,8 @@ You understand the codebase when you can explain, from the code:
 If you can walk all five of those without re-opening files, you're at the target depth.
 For the full synthesized breakdown — module responsibilities, the guard rules spelled
 out, the data contract, testing philosophy, and known limits — read
-**`references/architecture.md`**. Use it to go deep on one area or to check your
-understanding, not as a substitute for reading the code.
+`references/architecture.md` (resolve it relative to this `SKILL.md`). Use it to go
+deep on one area or to check your understanding, not as a substitute for reading the code.
 
 ## How to report your understanding
 

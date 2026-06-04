@@ -1,7 +1,7 @@
-"""Tests for tools/exa_tool.py — exa_search tool and EXA_SEARCH_TOOL schema (async)."""
+"""Tests for shared_agentic_tools/exa_tool.py — exa_search tool and EXA_SEARCH_TOOL schema (async)."""
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -27,7 +27,9 @@ def _make_exa_response(results):
 
 @pytest.fixture()
 def fake_exa():
+    # exa_search now awaits the native async client, so `search` must be awaitable.
     exa = MagicMock()
+    exa.search = AsyncMock()
     return exa
 
 
@@ -40,42 +42,42 @@ class TestExaSearchToolSchema:
     """EXA_SEARCH_TOOL schema must have the exact shape agents depend on."""
 
     def test_schema_name(self):
-        from duvo.tools.exa_tool import EXA_SEARCH_TOOL
+        from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL
 
         assert EXA_SEARCH_TOOL.name == "exa_search"
 
     def test_schema_has_description(self):
-        from duvo.tools.exa_tool import EXA_SEARCH_TOOL
+        from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL
 
         assert EXA_SEARCH_TOOL.description
         assert len(EXA_SEARCH_TOOL.description) > 10
 
     def test_schema_input_schema_type_object(self):
-        from duvo.tools.exa_tool import EXA_SEARCH_TOOL
+        from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL
 
         assert EXA_SEARCH_TOOL.parameters["type"] == "object"
 
     def test_schema_has_required_query(self):
-        from duvo.tools.exa_tool import EXA_SEARCH_TOOL
+        from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL
 
         assert "query" in EXA_SEARCH_TOOL.parameters["required"]
 
     def test_schema_has_query_property(self):
-        from duvo.tools.exa_tool import EXA_SEARCH_TOOL
+        from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL
 
         props = EXA_SEARCH_TOOL.parameters["properties"]
         assert "query" in props
         assert props["query"]["type"] == "string"
 
     def test_schema_has_start_published_date_property(self):
-        from duvo.tools.exa_tool import EXA_SEARCH_TOOL
+        from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL
 
         props = EXA_SEARCH_TOOL.parameters["properties"]
         assert "start_published_date" in props
         assert props["start_published_date"]["type"] == "string"
 
     def test_start_published_date_not_required(self):
-        from duvo.tools.exa_tool import EXA_SEARCH_TOOL
+        from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL
 
         required = EXA_SEARCH_TOOL.parameters.get("required", [])
         assert "start_published_date" not in required
@@ -90,7 +92,7 @@ class TestExaSearch:
     """exa_search() is now async; returns formatted strings and handles edge cases."""
 
     async def test_formats_results_with_title_date_url_summary(self, fake_exa):
-        fake_exa.search_and_contents.return_value = _make_exa_response(
+        fake_exa.search.return_value = _make_exa_response(
             [
                 _make_exa_result(
                     title="My Title",
@@ -101,8 +103,8 @@ class TestExaSearch:
             ]
         )
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             result = await exa_search("test query")
 
@@ -112,17 +114,17 @@ class TestExaSearch:
         assert "SUMMARY: Short summary here." in result
 
     async def test_no_results_returns_no_results_string(self, fake_exa):
-        fake_exa.search_and_contents.return_value = _make_exa_response([])
+        fake_exa.search.return_value = _make_exa_response([])
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             result = await exa_search("empty query")
 
         assert result == "no results"
 
     async def test_multiple_results_all_formatted(self, fake_exa):
-        fake_exa.search_and_contents.return_value = _make_exa_response(
+        fake_exa.search.return_value = _make_exa_response(
             [
                 _make_exa_result(title="First"),
                 _make_exa_result(title="Second"),
@@ -130,8 +132,8 @@ class TestExaSearch:
             ]
         )
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             result = await exa_search("multi query")
 
@@ -140,10 +142,10 @@ class TestExaSearch:
         assert "TITLE: Third" in result
 
     async def test_search_exception_returns_search_failed_string(self, fake_exa):
-        fake_exa.search_and_contents.side_effect = ConnectionError("network error")
+        fake_exa.search.side_effect = ConnectionError("network error")
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             result = await exa_search("bad query")
 
@@ -151,37 +153,37 @@ class TestExaSearch:
         assert "network error" in result
 
     async def test_start_published_date_passed_to_search(self, fake_exa):
-        fake_exa.search_and_contents.return_value = _make_exa_response([])
+        fake_exa.search.return_value = _make_exa_response([])
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             await exa_search("query with date", start_published_date="2024-01-01")
 
-        _, kwargs = fake_exa.search_and_contents.call_args
+        _, kwargs = fake_exa.search.call_args
         assert kwargs.get("start_published_date") == "2024-01-01"
 
     async def test_no_start_published_date_not_in_kwargs(self, fake_exa):
-        fake_exa.search_and_contents.return_value = _make_exa_response([])
+        fake_exa.search.return_value = _make_exa_response([])
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             await exa_search("plain query")
 
-        _, kwargs = fake_exa.search_and_contents.call_args
+        _, kwargs = fake_exa.search.call_args
         assert "start_published_date" not in kwargs
 
     async def test_summary_truncated_to_400_chars(self, fake_exa):
         long_summary = "x" * 600
-        fake_exa.search_and_contents.return_value = _make_exa_response(
+        fake_exa.search.return_value = _make_exa_response(
             [
                 _make_exa_result(summary=long_summary),
             ]
         )
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             result = await exa_search("long summary query")
 
@@ -193,42 +195,42 @@ class TestExaSearch:
                 break
 
     async def test_none_title_shows_none_placeholder(self, fake_exa):
-        fake_exa.search_and_contents.return_value = _make_exa_response(
+        fake_exa.search.return_value = _make_exa_response(
             [
                 _make_exa_result(title=None),
             ]
         )
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             result = await exa_search("query")
 
         assert "TITLE: (none)" in result
 
     async def test_none_date_shows_unknown(self, fake_exa):
-        fake_exa.search_and_contents.return_value = _make_exa_response(
+        fake_exa.search.return_value = _make_exa_response(
             [
                 _make_exa_result(published_date=None),
             ]
         )
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             result = await exa_search("query")
 
         assert "DATE: unknown" in result
 
     async def test_returns_string_type(self, fake_exa):
-        fake_exa.search_and_contents.return_value = _make_exa_response(
+        fake_exa.search.return_value = _make_exa_response(
             [
                 _make_exa_result(),
             ]
         )
 
-        with patch("duvo.tools.exa_tool._get_exa", return_value=fake_exa):
-            from duvo.tools.exa_tool import exa_search
+        with patch("duvo.shared_agentic_tools.exa_tool._get_exa", return_value=fake_exa):
+            from duvo.shared_agentic_tools.exa_tool import exa_search
 
             result = await exa_search("query")
 
@@ -245,18 +247,62 @@ class TestExaLazyInit:
 
     def test_module_imports_without_api_key(self, monkeypatch):
         """Importing the exa_tool module must not raise even if EXA_API_KEY is empty."""
-        import duvo.tools.exa_tool as exa_tool
+        import duvo.shared_agentic_tools.exa_tool as exa_tool
 
         # If we got here without RuntimeError, the lazy init works
         assert hasattr(exa_tool, "exa_search")
 
     def test_get_exa_raises_when_key_missing(self, monkeypatch):
         """_get_exa() must raise RuntimeError when EXA_API_KEY is empty."""
-        import duvo.tools.exa_tool as exa_tool
+        import duvo.shared_agentic_tools.exa_tool as exa_tool
 
         # Reset the cached client so _get_exa() re-runs initialisation
-        monkeypatch.setattr("duvo.tools.exa_tool._exa", None)
+        monkeypatch.setattr("duvo.shared_agentic_tools.exa_tool._exa", None)
 
-        with patch("duvo.tools.exa_tool.EXA_API_KEY", ""):
+        with patch("duvo.shared_agentic_tools.exa_tool.EXA_API_KEY", ""):
             with pytest.raises(RuntimeError):
                 exa_tool._get_exa()
+
+
+# ---------------------------------------------------------------------------
+# aclose tests (parallel to infra.http_client.aclose)
+# ---------------------------------------------------------------------------
+
+
+class TestExaAclose:
+    """aclose() drains the async client's HTTP pool and resets the cache."""
+
+    async def test_closes_underlying_client_and_resets_cache(self, monkeypatch):
+        import duvo.shared_agentic_tools.exa_tool as exa_tool
+
+        fake = MagicMock()
+        fake._client = MagicMock()
+        fake._client.aclose = AsyncMock()
+        monkeypatch.setattr(exa_tool, "_exa", fake)
+
+        await exa_tool.aclose()
+
+        fake._client.aclose.assert_awaited_once()
+        assert exa_tool._exa is None
+
+    async def test_noop_when_no_client_created(self, monkeypatch):
+        """No HTTP pool was ever created (_client is None) — aclose must not touch it."""
+        import duvo.shared_agentic_tools.exa_tool as exa_tool
+
+        fake = MagicMock()
+        fake._client = None
+        fake._client_aclose = AsyncMock()  # would raise if .aclose were awaited
+        monkeypatch.setattr(exa_tool, "_exa", fake)
+
+        await exa_tool.aclose()
+
+        assert exa_tool._exa is None
+
+    async def test_noop_when_never_initialised(self, monkeypatch):
+        import duvo.shared_agentic_tools.exa_tool as exa_tool
+
+        monkeypatch.setattr(exa_tool, "_exa", None)
+
+        await exa_tool.aclose()  # must not raise
+
+        assert exa_tool._exa is None

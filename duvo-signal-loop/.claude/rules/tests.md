@@ -14,8 +14,8 @@ The suite is **fully offline** — no API keys, no network, no real model calls.
 
 ## Mock at the boundaries
 
-- **Model loop**: patch `duvo.agents.<mod>.run_agent` with an async fake that calls `impls[...]` directly to simulate the model's tool choices — never hit Anthropic. (See the fakes in `test_scouts.py` / `test_router.py`.)
-- **Search**: patch `duvo.tools.exa_tool._get_exa`.
+- **Model loop**: patch `duvo.agents.<mod>.run_agent` with an async fake that calls `impls[...]` directly to simulate the model's tool choices — never hit the configured LLM provider. (See the fakes in `test_scouts.py` / `test_router.py`.)
+- **Search**: patch `duvo.shared_agentic_tools.exa_tool._get_exa`.
 - **HTTP**: patch `duvo.infra.http_client.get_client` with `conftest.make_fake_async_client(...)`; assert on `client.post.call_args_list`.
 - **Config**: swap providers/keys with `monkeypatch.setattr(config, "CRM_PROVIDER", …)` — never read real env.
 

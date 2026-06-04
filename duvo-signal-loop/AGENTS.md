@@ -23,8 +23,8 @@ The package mirrors the `duvo.*` logger tree — one folder per concern:
 | Kernel | `duvo/config.py`, `models.py`, `agent_core.py` | env/constants, the Pydantic contract, the one agent runtime |
 | Orchestration | `duvo/orchestrator.py` | semaphore-bounded `gather` → report |
 | Cross-cutting | `duvo/infra/` | `logging_setup.py`, `http_client.py` |
-| Agent tools | `duvo/tools/` | e.g. `exa_tool.py` |
-| Agents | `duvo/agents/` (+ `agent_prompts/`) | scouts, analyst, router; prompts as Markdown |
+| Shared agentic tools | `duvo/shared_agentic_tools/` | cross-agent tools such as `exa_tool.py` |
+| Agents | `duvo/agents/` | scouts, analyst, router packages with local `prompts/` and `tools/` |
 | Write-backs | `duvo/writeback/` | pluggable CRM / Slack / outreach adapters + dispatchers |
 | Reporting | `duvo/reporting/` | sync HTML audit report |
 
@@ -32,11 +32,11 @@ Put new code in the folder that owns its concern. Extend an existing module befo
 
 ## Non-negotiables
 
-- **Async-first end-to-end.** Use `asyncio`, fan out with `asyncio.gather`, bound concurrency with `asyncio.Semaphore`, and offload sync-only libs (e.g. `exa-py`) via `asyncio.to_thread` — never block the event loop. Reporting stays sync (pure CPU/file I/O).
-- **One runtime.** Every agent runs on `agent_core.run_agent`. Do not hand-roll a model loop or call the Anthropic/Exa client outside its owning module. See the agent conventions.
+- **Async-first end-to-end.** Use `asyncio`, fan out with `asyncio.gather`, bound concurrency with `asyncio.Semaphore`, and prefer a library's native async client (Exa via `AsyncExa`, HTTP via `httpx.AsyncClient`) — never block the event loop. For a sync-only lib with no async client, offload via `asyncio.to_thread`. Reporting stays sync (pure CPU/file I/O).
+- **One runtime.** Every agent runs on `agent_core.run_agent`. Do not hand-roll a model loop, call an LLM provider outside `duvo/llm/`, or call the Exa client outside its owning module. See the agent conventions.
 - **One LLM boundary.** `duvo/llm/` owns all model-provider concerns: `agent_core` and the agents speak only the neutral types in `duvo/llm/base.py`. LiteLLM is a sanctioned dependency, but **only `duvo/llm/litellm_provider.py` may import it** — no wire format (OpenAI/Anthropic) leaks past that file. Add a model provider by dropping `duvo/llm/<name>_provider.py` and `@register_llm("<name>")`.
-- **Config via env with defaults** in `config.py`. Guard a key with `require()` only when it is *always* needed (Exa, Anthropic); leave write-back keys lazy so `--dry-run` and the offline tests work without a full `.env`.
-- **Per-task isolation.** A failing unit (account / scout beat / write-back tool) is logged and degrades to `None` / `[]` / a `failed: …` status — it never aborts the batch. See `_process_account` and `scouts._run_scout_safe`.
+- **Config via env with defaults** in `config.py`. Guard a key with `require()` only when it is *always* needed before a live network call (Exa; provider-specific LLM keys are validated by the provider); leave write-back keys lazy so `--dry-run` and the offline tests work without a full `.env`.
+- **Per-task isolation.** A failing unit (account / scout beat / write-back tool) is logged and degrades to `None` / `[]` / a `failed: …` status — it never aborts the batch. See `_process_account` and `agents/scouts/isolation.py:run_scout_safe`.
 - **Bounded agency.** Guarantees live in deterministic code, not prompts (see the agent conventions).
 
 > These rules are guidance Claude reads, like CLAUDE.md — not enforcement. Guaranteed behavior belongs in code, guards, and tests.
@@ -60,8 +60,8 @@ Write code that reads like the file next to it — senior, plain, no speculative
 
 ## Idioms to reuse (don't reinvent)
 
-- **Lazy module-level singleton + `require()` at call time** for any external client, so the module imports without secrets and the key is validated only on real use. Canonical: `infra/http_client.py:get_client`, `agent_core._get_client`, `tools/exa_tool._get_exa`.
-- **Defensive coercion over trust.** Inputs from the LLM or JSON are clamped/coerced before use, with a conservative fallback — never trusted to be in range. Canonical: `agents/analyst.py:run_analyst` (score clamp to 1–10, `_conservative_default`).
+- **Lazy module-level singleton + `require()` at call time** for any external client, so the module imports without secrets and the key is validated only on real use. Canonical: `infra/http_client.py:get_client`, `shared_agentic_tools/exa_tool._get_exa`.
+- **Defensive coercion over trust.** Inputs from the LLM or JSON are clamped/coerced before use, with a conservative fallback — never trusted to be in range. Canonical: `agents/analyst/guards.py:score_from_assessment_payload` (score clamp to 1–10, `_conservative_default`).
 
 ## Anti-bloat
 
@@ -76,18 +76,18 @@ Every agent is the same runtime with a different prompt + toolset. Copy the shap
 ## The runtime
 
 - Drive the agent with `await run_agent(system, user, tools, impls, max_turns=…, final_tools={…}, log=…, max_tokens=…)`. Nothing in `agents/` calls an LLM provider directly — only `agent_core` does, and it speaks the neutral types in `duvo/llm/base.py` (never a wire format).
-- **Tools** are `ToolSpec` objects built with `tool_schema(name, description, parameters)` from `duvo.llm.base` (provider-neutral; the provider translates them to wire format). **`impls`** maps tool name → callable (sync or async — `run_agent` auto-awaits awaitables). Reuse `EXA_SEARCH_TOOL` / `exa_search` from `tools/exa_tool.py` for search.
+- **Tools** are `ToolSpec` objects built with `tool_schema(name, description, parameters)` from `duvo.llm.base` (provider-neutral; the provider translates them to wire format). **`impls`** maps tool name → callable (sync or async — `run_agent` auto-awaits awaitables). Reuse `EXA_SEARCH_TOOL` / `exa_search` from `shared_agentic_tools/exa_tool.py` for search.
 - Name the terminating tool(s) in `final_tools` (e.g. `submit_signals`, `record_assessment`, `finish`). Capture its payload into a closure dict and read it back after the loop returns — the loop returns the transcript, not the result.
 - Set `max_tokens` high enough for large terminal payloads (see `analyst.ANALYST_MAX_TOKENS = 4096`) so the final tool JSON isn't truncated.
 - Pass the shared `log` list through so tool calls land in the audit report.
 
 ## Prompts are externalized
 
-System prompts live in `agent_prompts/<name>.md`, loaded via `load_prompt(name, **params)` with `{placeholder}` substitution. **Never inline a multi-line prompt string.** Keep the section layout: `# Role`, `## Objective`, `## Tools`, `## Guidelines`, `## When done`. To add an agent: drop a new `<name>.md` and `load_prompt("<name>", …)`.
+System prompts live with the agent that owns them: `duvo/agents/<agent>/prompts/<name>.md`, loaded by that package's local prompt loader with `{placeholder}` substitution. **Never inline a multi-line prompt string.** Keep the section layout: `# Role`, `## Objective`, `## Tools`, `## Guidelines`, `## When done`. To add an agent: drop its prompt under the new agent package's `prompts/` folder and expose a small local loader.
 
 ## Isolation
 
-Wrap fan-out units so one failure returns `[]` and siblings survive — see `_run_scout_safe`. Tolerate sloppy model calls (e.g. `submit_signals()` with no args → treat as "found nothing"), don't raise.
+Wrap fan-out units so one failure returns `[]` and siblings survive — see `run_scout_safe`. Tolerate sloppy model calls (e.g. `submit_signals()` with no args → treat as "found nothing"), don't raise.
 
 ## Determinism over the model
 
@@ -123,7 +123,7 @@ One interface, swappable providers. Copy `attio.py` / `brevo.py` for an adapter,
 
 ## Boundaries
 
-- `dry_run` is handled at the **router** layer (`agents/router.py`), not inside adapters — adapters always do the real call.
+- `dry_run` is handled at the **router** layer (`agents/router/router.py`), not inside adapters — adapters always do the real call.
 - Outreach **queues for review** (Brevo list / paused lemlist campaign); it never auto-sends. Preserve that in any new outreach adapter.
 
 # Testing conventions
@@ -139,8 +139,8 @@ The suite is **fully offline** — no API keys, no network, no real model calls.
 
 ## Mock at the boundaries
 
-- **Model loop**: patch `duvo.agents.<mod>.run_agent` with an async fake that calls `impls[...]` directly to simulate the model's tool choices — never hit Anthropic. (See the fakes in `test_scouts.py` / `test_router.py`.)
-- **Search**: patch `duvo.tools.exa_tool._get_exa`.
+- **Model loop**: patch `duvo.agents.<mod>.run_agent` with an async fake that calls `impls[...]` directly to simulate the model's tool choices — never hit the configured LLM provider. (See the fakes in `test_scouts.py` / `test_router.py`.)
+- **Search**: patch `duvo.shared_agentic_tools.exa_tool._get_exa`.
 - **HTTP**: patch `duvo.infra.http_client.get_client` with `conftest.make_fake_async_client(...)`; assert on `client.post.call_args_list`.
 - **Config**: swap providers/keys with `monkeypatch.setattr(config, "CRM_PROVIDER", …)` — never read real env.
 

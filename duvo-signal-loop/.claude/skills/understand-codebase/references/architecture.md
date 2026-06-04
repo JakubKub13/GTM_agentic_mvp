@@ -27,7 +27,7 @@ shim that calls `duvo.orchestrator.main` (so `uv run python main.py` and
 A multi-agent GTM (go-to-market) pipeline for **Duvo** — a company selling AI agents
 that automate retail/CPG back-office work (reconciliation, PO/invoice matching). It
 takes a CSV of target retail/CPG accounts and, per account, runs a **scouts → analyst
-→ router** chain of tool-using Claude agents that scout intent signals, score ICP
+→ router** chain of tool-using LLM agents that scout intent signals, score ICP
 (Ideal Customer Profile) fit, and route the account into a sales stack (CRM + Slack +
 outreach), then emits an HTML audit report. It is built as a polished demo/portfolio
 project — note the sourced `.env.example`, the honest "where it breaks" section, and
@@ -35,16 +35,18 @@ the fully-mocked offline test suite.
 
 ## 2. The core idea: one runtime, many agents
 
-`agent_core.run_agent()` (`duvo/agent_core.py:33`) is the single primitive. Every agent
-is a different `(system, tools, impls)` triple over the same loop:
+`agent_core.run_agent()` is the single primitive. Every agent is a different
+`(system, tools, impls)` triple over the same provider-neutral loop:
 
-1. `messages.create` with conversation + tools.
-2. Append assistant response; extract `tool_use` blocks. None → return.
-3. For each tool call: look up impl, call it, **await if `inspect.isawaitable`** (this is
+1. Build an `LLMRequest` with model, system prompt, neutral messages, tools, and token cap.
+2. Resolve the configured provider through `duvo/llm/registry.py` and call
+   `LLMProvider.complete()`.
+3. Append the normalized assistant `Message`; inspect `response.tool_calls`. None → return.
+4. For each tool call: look up impl, call it, **await if `inspect.isawaitable`** (this is
    what lets sync and async tools coexist); catch exceptions → `"tool error: …"`;
    unknown tool → `"unknown tool: …"`.
-4. Feed all `tool_result`s back as one user message.
-5. Any called tool in `final_tools` → return. Else loop to `max_turns`.
+5. Feed each result back as a neutral tool `Message`.
+6. Any called tool in `final_tools` → return. Else loop to `max_turns`.
 
 Design choices to notice:
 - **Sync/async polymorphism** via `inspect.isawaitable` — and the explicit falsy edge
@@ -53,8 +55,9 @@ Design choices to notice:
 - **`max_turns`** is the infinite-loop backstop (default 8; scouts `MAX_SCOUT_SEARCHES+2`,
   analyst `MAX_ANALYST_SEARCHES+3`, router 6).
 - **`log` list** threads through to record every tool call as `"name(args)"` for the report.
-- **Lazy `AsyncAnthropic` singleton** (`_get_client`) — imports without a key; key
-  required (`config.require`) only on first real call.
+- **One LLM boundary** — `agent_core` and agents only speak the neutral types in
+  `duvo/llm/base.py`; `duvo/llm/litellm_provider.py` is the default provider and the
+  only module that knows LiteLLM/OpenAI-style wire format.
 
 ## 3. The per-account pipeline (orchestration)
 
@@ -77,10 +80,12 @@ Design choices to notice:
 
 ## 4. The three agent roles
 
-### Scouts (`duvo/agents/scouts.py`) — 4 concurrent signal hunters
+### Scouts (`duvo/agents/scouts/scouts.py`) — 4 concurrent signal hunters
+- Prompt copy lives with the agent at `duvo/agents/scouts/prompts/scout.md`; the runner
+  loads it through `duvo/agents/scouts/prompts/__init__.py`.
 - Four `BEATS`: `erp_migration`, `hiring`, `ma_leadership`, `pain` — matching
   `Signal.signal_type` `Literal`s.
-- `scout_all` fans out via `asyncio.gather`; each wrapped in `_run_scout_safe` so one
+- `scout_all` fans out via `asyncio.gather`; each wrapped in `run_scout_safe` so one
   failing beat returns `[]` instead of killing the other three (per-beat isolation,
   below the per-account layer).
 - Each scout = `run_agent` with `exa_search` (async) + `submit_signals` (sync, final).
@@ -89,7 +94,9 @@ Design choices to notice:
 - Results re-validated into `Signal`s with `signal_type` forced to the beat's key — the
   model never picks the type.
 
-### Analyst (`duvo/agents/analyst.py`) — validate, score, draft + deterministic guards
+### Analyst (`duvo/agents/analyst/analyst.py`) — validate, score, draft + deterministic guards
+- Prompt copy lives with the agent at `duvo/agents/analyst/prompts/analyst.md`; the runner
+  loads it through `duvo/agents/analyst/prompts/__init__.py`.
 - `run_agent` with `exa_search` (verify doubtful signals, max `MAX_ANALYST_SEARCHES`=2)
   + `record_assessment` (final). Given the full `ICP_DEFINITION` and the signals as JSON.
 - **Two-layer defense** (assumes the LLM misbehaves):
@@ -97,14 +104,16 @@ Design choices to notice:
     (score 3, Tier 3, needs research); non-numeric score → 3; out-of-range → **clamped
     [1,10]**; invalid tier/confidence → safe defaults; malformed outreach → empty draft;
     any `ICPScore` failure → conservative default.
-  - **Layer B — `apply_guards()`** (`duvo/agents/analyst.py:191`), pure/sync/deterministic,
+  - **Layer B — `apply_guards()`** (`duvo/agents/analyst/guards.py:apply_guards`), pure/sync/deterministic,
     rules in order: (1) no dated signals → `confidence=low`, `needs_human_research=True`;
     (2) `confidence==low` & `score>=7` → cap to 6; (3) tier derived from score —
     `>=8 & not needs_human_research`→Tier 1, `>=5`→Tier 2, else Tier 3 (**overrides the
     model's tier**); (4) `needs_human_research` & Tier 1 → downgrade to Tier 2.
   - Net effect: a hallucinated high score can never *alone* yield a confident Tier 1.
 
-### Router (`duvo/agents/router.py`) — the never-send safety layer
+### Router (`duvo/agents/router/router.py`) — the never-send safety layer
+- Prompt copy lives with the agent at `duvo/agents/router/prompts/router.md`; the runner
+  loads it through `duvo/agents/router/prompts/__init__.py`.
 - `run_agent` with four no-input tools: `crm_upsert`, `slack_alert`, `outreach_queue`,
   `finish`.
 - `confident_t1 = (tier == "Tier 1") and (not needs_human_research)` — computed once,
@@ -153,9 +162,11 @@ Five Pydantic models are the spine every agent agrees on:
 ## 7. Cross-cutting infrastructure
 
 - **`duvo/config.py`** — centralized env reads; `require(name, value)` raises a clear error
-  for required keys (Exa, Anthropic) but leaves write-back keys lazy so `--dry-run` runs
-  without a full `.env`. Model hardcoded `claude-sonnet-4-6`. All concurrency/timeout
-  knobs env-overridable with sane defaults.
+  for credentials that must exist before a live network call (Exa; the selected LLM
+  provider key is validated by its provider) but leaves write-back keys lazy so
+  `--dry-run` runs without a full `.env`. `LLM_PROVIDER` selects the provider registry
+  entry and `LLM_MODEL` selects the model string; all concurrency/timeout knobs are
+  env-overridable with sane defaults.
 - **`duvo/infra/logging_setup.py`** — single `duvo.*` logger tree; idempotent `configure_logging`
   (no duplicate handlers); `propagate=False`; level resolvable from string with INFO
   fallback; secrets never logged.
@@ -167,7 +178,7 @@ Five Pydantic models are the spine every agent agrees on:
 
 ## 8. Testing philosophy
 
-290 tests, fully offline — Anthropic, Exa, and all HTTP mocked; no keys, no network.
+324 tests, fully offline — the LLM provider, Exa, and all HTTP mocked; no keys, no network.
 `asyncio_mode = auto`. `conftest.py` supplies `make_fake_async_client`, `_fake_response`,
 `make_score`. The agent-testing trick: **patch `run_agent` itself** with a fake that calls
 a chosen tool sequence — so router/analyst logic is tested deterministically without

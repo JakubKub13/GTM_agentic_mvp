@@ -10,18 +10,18 @@ Every agent is the same runtime with a different prompt + toolset. Copy the shap
 ## The runtime
 
 - Drive the agent with `await run_agent(system, user, tools, impls, max_turns=…, final_tools={…}, log=…, max_tokens=…)`. Nothing in `agents/` calls an LLM provider directly — only `agent_core` does, and it speaks the neutral types in `duvo/llm/base.py` (never a wire format).
-- **Tools** are `ToolSpec` objects built with `tool_schema(name, description, parameters)` from `duvo.llm.base` (provider-neutral; the provider translates them to wire format). **`impls`** maps tool name → callable (sync or async — `run_agent` auto-awaits awaitables). Reuse `EXA_SEARCH_TOOL` / `exa_search` from `tools/exa_tool.py` for search.
+- **Tools** are `ToolSpec` objects built with `tool_schema(name, description, parameters)` from `duvo.llm.base` (provider-neutral; the provider translates them to wire format). **`impls`** maps tool name → callable (sync or async — `run_agent` auto-awaits awaitables). Reuse `EXA_SEARCH_TOOL` / `exa_search` from `shared_agentic_tools/exa_tool.py` for search.
 - Name the terminating tool(s) in `final_tools` (e.g. `submit_signals`, `record_assessment`, `finish`). Capture its payload into a closure dict and read it back after the loop returns — the loop returns the transcript, not the result.
 - Set `max_tokens` high enough for large terminal payloads (see `analyst.ANALYST_MAX_TOKENS = 4096`) so the final tool JSON isn't truncated.
 - Pass the shared `log` list through so tool calls land in the audit report.
 
 ## Prompts are externalized
 
-System prompts live in `agent_prompts/<name>.md`, loaded via `load_prompt(name, **params)` with `{placeholder}` substitution. **Never inline a multi-line prompt string.** Keep the section layout: `# Role`, `## Objective`, `## Tools`, `## Guidelines`, `## When done`. To add an agent: drop a new `<name>.md` and `load_prompt("<name>", …)`.
+System prompts live with the agent that owns them: `duvo/agents/<agent>/prompts/<name>.md`, loaded by that package's local prompt loader with `{placeholder}` substitution. **Never inline a multi-line prompt string.** Keep the section layout: `# Role`, `## Objective`, `## Tools`, `## Guidelines`, `## When done`. To add an agent: drop its prompt under the new agent package's `prompts/` folder and expose a small local loader.
 
 ## Isolation
 
-Wrap fan-out units so one failure returns `[]` and siblings survive — see `_run_scout_safe`. Tolerate sloppy model calls (e.g. `submit_signals()` with no args → treat as "found nothing"), don't raise.
+Wrap fan-out units so one failure returns `[]` and siblings survive — see `run_scout_safe`. Tolerate sloppy model calls (e.g. `submit_signals()` with no args → treat as "found nothing"), don't raise.
 
 ## Determinism over the model
 

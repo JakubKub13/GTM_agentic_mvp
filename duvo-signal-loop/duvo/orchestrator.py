@@ -12,6 +12,7 @@ from duvo.infra import http_client
 from duvo.infra.logging_setup import configure_logging, get_logger
 from duvo.models import Company, RunResult
 from duvo.reporting.reporter import generate_report
+from duvo.shared_agentic_tools import exa_tool
 
 
 def load_companies(path: str = "companies.csv") -> list[Company]:
@@ -127,6 +128,7 @@ async def run(
         )
     finally:
         await http_client.aclose()
+        await exa_tool.aclose()
 
     results: list[RunResult] = [r for r in raw_results if r is not None]
     path = generate_report(results)

@@ -53,7 +53,7 @@ Every agent runs on one shared async tool-use loop (`duvo.agent_core.run_agent`)
 
 | Agent | Role |
 |---|---|
-| 🔎 **Scout** (×4, concurrent) | Each owns a beat (ERP · hiring · M&A · pain), uses an `exa_search` tool, decides its own queries, and returns **only sourced signals**. The four fan out via `asyncio.gather`; one failing beat is isolated so the others still produce signals. Since `exa-py` is sync-only, `exa_search` offloads to a thread via `asyncio.to_thread` to keep the event loop responsive. |
+| 🔎 **Scout** (×4, concurrent) | Each owns a beat (ERP · hiring · M&A · pain), uses an `exa_search` tool, decides its own queries, and returns **only sourced signals**. The four fan out via `asyncio.gather`; one failing beat is isolated so the others still produce signals. `exa_search` uses Exa's native async client (`AsyncExa`), so it awaits directly on the event loop. |
 | 🧠 **Analyst** | Validates signals (can run its own verification searches before trusting a claim), scores ICP fit, and drafts personalized outreach. A deterministic `apply_guards()` caps any hallucinated confidence, and the score is clamped to the valid **1–10** range before it is trusted. |
 | 🚦 **Router** | Decides how to action the account — its tools *are* the write-backs. They self-guard: Slack/outreach refuse anything but a confident Tier 1, and the guard fires **before** the write-back module is even imported. |
 
@@ -156,7 +156,7 @@ Run with `uv run` (dependencies are automatically in scope) or after activating 
 The entire pipeline is async end-to-end:
 
 - 🎯 **Orchestrator** (`duvo.orchestrator`, reached via the `main.py` entry shim) — `async def run(...)` fans out all accounts concurrently via `asyncio.gather`, bounded by `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)`. Each account runs in its own `_process_account` coroutine, so a single failure logs an error and yields `None` without aborting the batch. The shared `httpx.AsyncClient` is always closed via `await http_client.aclose()` in a `finally` block — even if every account fails.
-- 🔎 **Scouts** — four beats fan out via `asyncio.gather` inside `scout_all`; `exa_search` uses `asyncio.to_thread` to keep the loop unblocked.
+- 🔎 **Scouts** — four beats fan out via `asyncio.gather` inside `scout_all`; `exa_search` awaits Exa's native `AsyncExa` client directly on the loop.
 - 🧠🚦 **Analyst / Router** — `async def run_analyst` / `async def run_router` each drive the shared `async run_agent` loop; write-backs are awaited async `httpx` calls.
 - 📊 **Reporter** — `generate_report(results)` stays **sync** (pure CPU + file I/O, no network); calling it from an async context is safe and correct.
 - 🏁 **Entry point** — `asyncio.run(run(...))`.
@@ -232,7 +232,7 @@ Scouts as MCP-tool agents (Apollo / LinkedIn / Gong) · a discovery agent for ne
 ```text
 duvo-signal-loop/
 ├── duvo/                       # application package (mirrors the duvo.* logger tree)
-│   ├── config.py               # env + model + constants (concurrency + HTTP/Anthropic/account timeouts)
+│   ├── config.py               # env + model/provider + constants (concurrency + HTTP/model/account timeouts)
 │   ├── models.py               # Pydantic contract shared across agents
 │   ├── agent_core.py           # async run_agent() tool-use loop (provider-neutral)
 │   ├── llm/                     # LLM seam: neutral types + registry + LiteLLM provider
@@ -241,15 +241,13 @@ duvo-signal-loop/
 │   │   ├── logging_setup.py    # central duvo.* logger
 │   │   ├── http_client.py      # shared pooled httpx.AsyncClient — get_client() + async aclose()
 │   │   └── retry.py            # with_retries() — transient-failure retry w/ backoff for write-backs
-│   ├── tools/
-│   │   └── exa_tool.py         # exa_search tool (asyncio.to_thread for sync exa-py)
+│   ├── shared_agentic_tools/
+│   │   └── exa_tool.py         # shared exa_search tool (native AsyncExa client)
 │   ├── agents/
-│   │   ├── scouts.py           # 4 concurrent scout agents (asyncio.gather fan-out)
-│   │   ├── analyst.py          # async analyst agent + apply_guards()
-│   │   ├── router.py           # async router agent; write-backs as self-guarding async tools
-│   │   └── agent_prompts/      # externalized system prompts as Markdown + load_prompt() loader
-│   │       ├── scout.md / analyst.md / router.md
-│   │       └── __init__.py     # load_prompt(name, **params) — reads <name>.md, fills {placeholders}
+│   │   ├── prompt_loader.py     # shared helper for reading agent-owned Markdown prompts
+│   │   ├── scouts/             # runner, beats, isolation, prompts/, scout-specific tools
+│   │   ├── analyst/            # runner, deterministic guards, prompts/, analyst-specific tools
+│   │   └── router/             # runner, policy helpers, prompts/, self-guarding router tools
 │   ├── writeback/
 │   │   ├── base.py / registry.py   # CRM/Outreach Protocols + @register_crm/@register_outreach registry
 │   │   ├── crm.py              # async CRM dispatcher → registry (attio | hubspot)
@@ -267,7 +265,7 @@ duvo-signal-loop/
 └── output/                     # generated reports (gitignored)
 ```
 
-> Each folder groups one functional concern: the package root holds the shared kernel (`config`, `models`, `agent_core`) and the `orchestrator`; `infra/` cross-cutting infrastructure; `tools/` agent tools; `agents/` the six agents (with their system prompts externalized as editable Markdown under `agents/agent_prompts/`); `writeback/` the pluggable sales-stack adapters; `reporting/` the HTML audit report.
+> Each folder groups one functional concern: the package root holds the shared kernel (`config`, `models`, `agent_core`) and the `orchestrator`; `infra/` cross-cutting infrastructure; `shared_agentic_tools/` cross-agent tools; `agents/` the scout, analyst, and router packages (with agent-specific prompts and tools inside each package); `writeback/` the pluggable sales-stack adapters; `reporting/` the HTML audit report.
 
 <div align="center">
 <sub>Built with Claude · async-first · human-in-the-loop by design</sub>

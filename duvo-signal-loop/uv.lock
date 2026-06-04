@@ -332,7 +332,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "exa-py", specifier = ">=1.0.0" },
+    { name = "exa-py", specifier = ">=2.0" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "jinja2", specifier = ">=3.1" },
     { name = "litellm", specifier = ">=1.83,<2" },

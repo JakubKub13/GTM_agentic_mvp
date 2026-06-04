@@ -57,7 +57,7 @@ class TestRunScout:
     async def test_returns_signal_objects(self):
         company = _make_company()
         fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "erp_migration", "ERP beat desc")
 
         assert len(signals) == 1
@@ -67,7 +67,7 @@ class TestRunScout:
         company = _make_company()
         for beat_key in ["erp_migration", "hiring", "ma_leadership", "pain"]:
             fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
-            with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+            with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
                 signals = await run_scout(company, beat_key, "some beat desc")
             assert len(signals) == 1
             assert signals[0].signal_type == beat_key
@@ -75,7 +75,7 @@ class TestRunScout:
     async def test_title_from_dict(self):
         company = _make_company()
         fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "erp_migration", "ERP desc")
         assert signals[0].title == "Acme ERP Migration"
 
@@ -83,7 +83,7 @@ class TestRunScout:
         sig_without_title = {k: v for k, v in SAMPLE_SIGNAL_DICT.items() if k != "title"}
         company = _make_company()
         fake = _make_fake_run_agent([sig_without_title])
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "hiring", "hiring desc")
         assert signals[0].title == "(no title)"
 
@@ -91,7 +91,7 @@ class TestRunScout:
         sig = {k: v for k, v in SAMPLE_SIGNAL_DICT.items() if k != "summary"}
         company = _make_company()
         fake = _make_fake_run_agent([sig])
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "pain", "pain desc")
         assert signals[0].summary == ""
 
@@ -99,7 +99,7 @@ class TestRunScout:
         sig = {k: v for k, v in SAMPLE_SIGNAL_DICT.items() if k != "relevance"}
         company = _make_company()
         fake = _make_fake_run_agent([sig])
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "ma_leadership", "M&A desc")
         assert signals[0].relevance == ""
 
@@ -107,7 +107,7 @@ class TestRunScout:
         sig = {**SAMPLE_SIGNAL_DICT, "published_date": ""}
         company = _make_company()
         fake = _make_fake_run_agent([sig])
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "pain", "pain desc")
         assert signals[0].published_date is None
 
@@ -115,7 +115,7 @@ class TestRunScout:
         sig = {**SAMPLE_SIGNAL_DICT, "published_date": None}
         company = _make_company()
         fake = _make_fake_run_agent([sig])
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "erp_migration", "ERP desc")
         assert signals[0].published_date is None
 
@@ -123,7 +123,7 @@ class TestRunScout:
         """If the agent never calls submit_signals, run_scout returns []."""
         fake = _make_fake_run_agent([], call_submit=False)
         company = _make_company()
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "erp_migration", "ERP desc")
         assert signals == []
 
@@ -141,7 +141,7 @@ class TestRunScout:
             return []
 
         company = _make_company()
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake_run_agent):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake_run_agent):
             signals = await run_scout(company, "hiring", "hiring desc")
         assert signals == []
 
@@ -153,7 +153,7 @@ class TestRunScout:
             return []
 
         company = _make_company()
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake_run_agent):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake_run_agent):
             signals = await run_scout(company, "pain", "pain desc")
         assert signals == []
 
@@ -161,7 +161,7 @@ class TestRunScout:
         sigs = [SAMPLE_SIGNAL_DICT, {**SAMPLE_SIGNAL_DICT, "title": "Another Signal"}]
         company = _make_company()
         fake = _make_fake_run_agent(sigs)
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             signals = await run_scout(company, "hiring", "hiring desc")
         assert len(signals) == 2
 
@@ -169,7 +169,7 @@ class TestRunScout:
         company = _make_company()
         log = []
         fake = _make_fake_run_agent([SAMPLE_SIGNAL_DICT])
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake):
             await run_scout(company, "erp_migration", "ERP desc", log=log)
         # The fake appends an entry to log when called
         assert len(log) >= 1
@@ -191,7 +191,7 @@ class TestScoutAll:
             return []
 
         company = _make_company()
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake_run_agent):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake_run_agent):
             signals = await scout_all(company)
 
         assert len(signals) == 4
@@ -204,7 +204,7 @@ class TestScoutAll:
             return []
 
         company = _make_company()
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake_run_agent):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake_run_agent):
             signals = await scout_all(company)
 
         types_found = {s.signal_type for s in signals}
@@ -218,7 +218,7 @@ class TestScoutAll:
             return []
 
         company = _make_company()
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake_run_agent):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake_run_agent):
             signals = await scout_all(company)
 
         assert signals == []
@@ -234,7 +234,7 @@ class TestScoutAll:
 
         company = _make_company()
         log = []
-        with patch("duvo.agents.scouts.run_agent", side_effect=fake_run_agent):
+        with patch("duvo.agents.scouts.scouts.run_agent", side_effect=fake_run_agent):
             await scout_all(company, log=log)
 
         # 4 beats each appended 1 entry — single event loop: no race condition
@@ -260,7 +260,7 @@ class TestScoutAll:
             ]
 
         company = _make_company()
-        with patch("duvo.agents.scouts.run_scout", side_effect=fake_run_scout):
+        with patch("duvo.agents.scouts.scouts.run_scout", side_effect=fake_run_scout):
             signals = await scout_all(company)
 
         # 3 beats succeeded (hiring, ma_leadership, pain) → 3 signals

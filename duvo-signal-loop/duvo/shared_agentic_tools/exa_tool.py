@@ -1,8 +1,6 @@
 """exa_search — the tool scouts and the analyst use to search the web."""
 
-import asyncio
-
-from exa_py import Exa
+from exa_py import AsyncExa
 
 from duvo.config import EXA_API_KEY, require
 from duvo.infra.logging_setup import get_logger
@@ -10,21 +8,23 @@ from duvo.llm.base import ToolSpec, tool_schema
 
 _log = get_logger(__name__)
 
-_exa = None
+_exa: AsyncExa | None = None
 
 
-def _get_exa() -> Exa:
-    """Return the shared Exa client, initialising it on first use.
+def _get_exa() -> AsyncExa:
+    """Return the shared async Exa client, initialising it on first use.
 
     Lazy init means the module can be imported in tests without a real API key;
-    the key is only validated when an actual search is attempted.
+    the key is only validated when an actual search is attempted. ``AsyncExa``
+    builds no HTTP client at construction (its ``_client`` is created lazily on
+    the first awaited call), so this is safe to call before the event loop runs.
 
     Double-construct race with a single event loop is benign under CPython's GIL;
     clients are stateless.
     """
     global _exa
     if _exa is None:
-        _exa = Exa(api_key=require("EXA_API_KEY", EXA_API_KEY))
+        _exa = AsyncExa(api_key=require("EXA_API_KEY", EXA_API_KEY))
     return _exa
 
 
@@ -49,15 +49,17 @@ EXA_SEARCH_TOOL: ToolSpec = tool_schema(
 )
 
 
-def _search_sync(query: str, start_published_date: str | None) -> str:
-    """Synchronous search + formatting logic — runs in a worker thread.
+async def exa_search(query: str, start_published_date: str | None = None) -> str:
+    """Search the web via Exa and return a formatted string of results (async).
 
-    Contains the existing search_and_contents call and result formatting so
-    the event loop is not blocked by exa-py's synchronous HTTP call.
+    Uses the native async client (``AsyncExa.search``), so the call
+    awaits directly on the event loop — no thread offload needed — and is
+    cancellable by an enclosing ``asyncio.timeout``.
 
     Args:
         query:               Focused search query.
-        start_published_date: Optional ISO date (YYYY-MM-DD).
+        start_published_date: Optional ISO date (YYYY-MM-DD); only results
+                             published on or after this date are returned.
 
     Returns:
         A newline-joined string with TITLE / DATE / URL / SUMMARY for each
@@ -69,12 +71,15 @@ def _search_sync(query: str, start_published_date: str | None) -> str:
     else:
         _log.info("exa_search: query=%r", query)
 
-    kwargs: dict = {"num_results": 5, "summary": {"query": query}}
+    # contents={"summary": ...} returns a query-focused summary per result and no
+    # full page text — same shape the formatting below reads (r.summary), and the
+    # modern, non-deprecated replacement for the old search_and_contents(summary=...).
+    kwargs: dict = {"num_results": 5, "contents": {"summary": {"query": query}}}
     if start_published_date:
         kwargs["start_published_date"] = start_published_date
 
     try:
-        res = _get_exa().search_and_contents(query, **kwargs)
+        res = await _get_exa().search(query, **kwargs)
     except Exception as exc:
         _log.warning("exa_search failed for query=%r: %s", query, exc)
         return f"search failed: {exc}"
@@ -94,20 +99,19 @@ def _search_sync(query: str, start_published_date: str | None) -> str:
     return "\n".join(lines) if lines else "no results"
 
 
-async def exa_search(query: str, start_published_date: str | None = None) -> str:
-    """Search the web via Exa and return a formatted string of results (async).
+async def aclose() -> None:
+    """Close the shared async Exa client's HTTP pool and reset the module cache.
 
-    exa-py is sync-only, so the blocking call is offloaded to a worker thread
-    via ``asyncio.to_thread`` to keep the event loop responsive.
+    Mirrors :func:`duvo.infra.http_client.aclose` — await it during shutdown so
+    the underlying ``httpx.AsyncClient`` drains cleanly (no unclosed-socket
+    ``ResourceWarning``). Safe to call when no client (or no HTTP pool) was ever
+    created.
 
-    Args:
-        query:               Focused search query.
-        start_published_date: Optional ISO date (YYYY-MM-DD); only results
-                             published on or after this date are returned.
-
-    Returns:
-        A newline-joined string with TITLE / DATE / URL / SUMMARY for each
-        result, or ``"no results"`` when the response is empty, or a
-        ``"search failed: <error>"`` string on exception.
+    Reads ``_exa._client`` directly rather than the ``.client`` property, which
+    would lazily *create* a client only to immediately close it.
     """
-    return await asyncio.to_thread(_search_sync, query, start_published_date)
+    global _exa
+    if _exa is not None and _exa._client is not None:
+        _log.debug("Closing shared AsyncExa HTTP client")
+        await _exa._client.aclose()
+    _exa = None

@@ -25,5 +25,5 @@ One interface, swappable providers. Copy `attio.py` / `brevo.py` for an adapter,
 
 ## Boundaries
 
-- `dry_run` is handled at the **router** layer (`agents/router.py`), not inside adapters — adapters always do the real call.
+- `dry_run` is handled at the **router** layer (`agents/router/router.py`), not inside adapters — adapters always do the real call.
 - Outreach **queues for review** (Brevo list / paused lemlist campaign); it never auto-sends. Preserve that in any new outreach adapter.

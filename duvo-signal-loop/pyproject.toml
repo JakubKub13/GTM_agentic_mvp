@@ -18,7 +18,7 @@ keywords = [
 ]
 
 dependencies = [
-    "exa-py>=1.0.0",
+    "exa-py>=2.0",
     "pydantic>=2.0",
     "jinja2>=3.1",
     "python-dotenv>=1.0",
