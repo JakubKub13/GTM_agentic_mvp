@@ -15,6 +15,7 @@ from duvo.agents.analyst.tools.record_assessment import (
     make_record_assessment_tool,
 )
 from duvo.config import MAX_ANALYST_SEARCHES
+from duvo.infra import tracing
 from duvo.infra.logging_setup import get_logger
 from duvo.models import Company, ICPScore, Signal
 from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL, exa_search
@@ -57,26 +58,58 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
         "exa_search": exa_search,
         "record_assessment": make_record_assessment_tool(captured),
     }
-    await run_agent(
-        system,
-        user,
-        [EXA_SEARCH_TOOL, RECORD_ASSESSMENT_TOOL],
-        impls,
-        max_turns=MAX_ANALYST_SEARCHES + 3,
-        final_tools={"record_assessment"},
-        log=log,
-        max_tokens=ANALYST_MAX_TOKENS,
-    )
-
-    if not captured:
-        _log.warning(
-            "analyst: no record_assessment call from agent for company=%r — using conservative default",
-            company.name,
+    with tracing.span(
+        name="🧠 analyst",
+        as_type="agent",
+        input=user,
+        metadata={"company": company.domain, "signals": len(signals)},
+    ) as agent_span:
+        await run_agent(
+            system,
+            user,
+            [EXA_SEARCH_TOOL, RECORD_ASSESSMENT_TOOL],
+            impls,
+            max_turns=MAX_ANALYST_SEARCHES + 3,
+            final_tools={"record_assessment"},
+            log=log,
+            max_tokens=ANALYST_MAX_TOKENS,
         )
-        return conservative_default(company)
 
-    score = score_from_assessment_payload(company, captured)
-    result = apply_guards(score, signals)
+        if not captured:
+            _log.warning(
+                "analyst: no record_assessment call from agent for company=%r — using conservative default",
+                company.name,
+            )
+            result = conservative_default(company)
+            if agent_span is not None:
+                agent_span.update(output={"score": result.score, "tier": result.tier, "fallback": True})
+            return result
+
+        score = score_from_assessment_payload(company, captured)
+        with tracing.span(
+            name="🛡️ apply_guards",
+            as_type="guardrail",
+            input={
+                "score": score.score,
+                "tier": score.tier,
+                "confidence": score.confidence,
+                "needs_human_research": score.needs_human_research,
+                "dated_signals": sum(1 for s in signals if s.published_date),
+            },
+        ) as gspan:
+            result = apply_guards(score, signals)
+            if gspan is not None:
+                gspan.update(
+                    output={
+                        "score": result.score,
+                        "tier": result.tier,
+                        "confidence": result.confidence,
+                        "needs_human_research": result.needs_human_research,
+                    }
+                )
+        if agent_span is not None:
+            agent_span.update(output={"score": result.score, "tier": result.tier})
+
     _log.info(
         "analyst done: company=%r score=%d tier=%s confidence=%s needs_human_research=%s",
         company.name,

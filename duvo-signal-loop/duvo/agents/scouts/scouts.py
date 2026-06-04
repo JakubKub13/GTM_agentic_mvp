@@ -13,6 +13,7 @@ from duvo.agents.scouts.tools.submit_signals import (
     signals_from_payload,
 )
 from duvo.config import MAX_SCOUT_SEARCHES
+from duvo.infra import tracing
 from duvo.infra.logging_setup import get_logger
 from duvo.models import Company, Signal
 from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL, exa_search
@@ -51,17 +52,25 @@ async def run_scout(
         "exa_search": exa_search,
         "submit_signals": make_submit_signals_tool(captured),
     }
-    await run_agent(
-        system,
-        user,
-        [EXA_SEARCH_TOOL, SUBMIT_SIGNALS_TOOL],
-        impls,
-        max_turns=MAX_SCOUT_SEARCHES + 2,
-        final_tools={"submit_signals"},
-        log=log,
-    )
+    with tracing.span(
+        name=f"🔎 scout:{beat_key}",
+        as_type="agent",
+        input=user,
+        metadata={"beat": beat_key, "company": company.domain},
+    ) as agent_span:
+        await run_agent(
+            system,
+            user,
+            [EXA_SEARCH_TOOL, SUBMIT_SIGNALS_TOOL],
+            impls,
+            max_turns=MAX_SCOUT_SEARCHES + 2,
+            final_tools={"submit_signals"},
+            log=log,
+        )
+        out = signals_from_payload(captured["signals"], beat_key)
+        if agent_span is not None:
+            agent_span.update(output={"signals": len(out)})
 
-    out = signals_from_payload(captured["signals"], beat_key)
     _log.info("scout done: company=%r beat=%s signals=%d", company.name, beat_key, len(out))
     return out
 

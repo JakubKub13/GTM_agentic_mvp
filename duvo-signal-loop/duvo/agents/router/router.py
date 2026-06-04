@@ -7,6 +7,7 @@ from duvo.agent_core import run_agent
 from duvo.agents.router.policy import is_confident_tier1
 from duvo.agents.router.prompts import load_router_prompt
 from duvo.agents.router.tools import build_router_toolset
+from duvo.infra import tracing
 from duvo.infra.logging_setup import get_logger
 from duvo.models import RunResult
 
@@ -50,4 +51,18 @@ async def run_router(
         ensure_ascii=False,
     )
 
-    await run_agent(ROUTER_SYSTEM, user, tools, impls, max_turns=6, final_tools={"finish"}, log=log)
+    with tracing.span(
+        name="🚦 router",
+        as_type="agent",
+        input=user,
+        metadata={"company": s.company_name, "tier": s.tier, "confident_t1": confident_t1},
+    ) as agent_span:
+        await run_agent(ROUTER_SYSTEM, user, tools, impls, max_turns=6, final_tools={"finish"}, log=log)
+        if agent_span is not None:
+            agent_span.update(
+                output={
+                    "crm": rr.crm_status,
+                    "slack": rr.slack_status,
+                    "outreach": rr.outreach_status,
+                }
+            )

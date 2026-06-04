@@ -1,6 +1,7 @@
 """Tests for analyst.py — fully mocked, no real Anthropic/Exa calls."""
 
 import json
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from duvo.agents.analyst import apply_guards, run_analyst
@@ -551,3 +552,39 @@ class TestOutreachStringCoercion:
             result = await run_analyst(company, signals)
         assert isinstance(result.outreach, OutreachDraft)
         assert result.outreach.subject == ""
+
+
+# ---------------------------------------------------------------------------
+# TestAnalystGuardrailSpan
+# ---------------------------------------------------------------------------
+
+
+class _SpyTracing:
+    def __init__(self):
+        self.spans = []
+
+    @contextmanager
+    def span(self, **kwargs):
+        self.spans.append(kwargs)
+
+        class _Rec:
+            def update(self, **kw):
+                pass
+
+        yield _Rec()
+
+
+class TestAnalystGuardrailSpan:
+    async def test_apply_guards_wrapped_in_guardrail_span(self):
+        company = _make_company()
+        signals = [_make_signal()]
+        fake = _make_fake_run_agent(VALID_ASSESSMENT)
+        spy = _SpyTracing()
+        with (
+            patch("duvo.agents.analyst.analyst.run_agent", side_effect=fake),
+            patch("duvo.agents.analyst.analyst.tracing", spy),
+        ):
+            await run_analyst(company, signals)
+        as_types = [s.get("as_type") for s in spy.spans]
+        assert "agent" in as_types  # the analyst span
+        assert "guardrail" in as_types  # the apply_guards span
