@@ -79,6 +79,8 @@ class LLMResponse:
     message: Message
     tool_calls: list[ToolCall]
     stop_reason: str
+    usage: dict[str, int] | None = None  # {"input","output","total"} token counts, provider-neutral
+    cost_usd: float | None = None  # total USD cost for this call, if the provider reports it
 
 
 def tool_schema(name: str, description: str, parameters: dict[str, Any]) -> ToolSpec:

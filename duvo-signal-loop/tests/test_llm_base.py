@@ -43,3 +43,25 @@ def test_llmrequest_and_response_shapes():
     )
     assert resp.tool_calls[0].id == "c1"
     assert resp.stop_reason == "tool_calls"
+
+
+def test_llm_response_usage_and_cost_default_none():
+    from duvo.llm.base import LLMResponse, Message
+
+    resp = LLMResponse(message=Message(role="assistant", content="x"), tool_calls=[], stop_reason="stop")
+    assert resp.usage is None
+    assert resp.cost_usd is None
+
+
+def test_llm_response_accepts_usage_and_cost():
+    from duvo.llm.base import LLMResponse, Message
+
+    resp = LLMResponse(
+        message=Message(role="assistant", content="x"),
+        tool_calls=[],
+        stop_reason="stop",
+        usage={"input": 10, "output": 5, "total": 15},
+        cost_usd=0.0012,
+    )
+    assert resp.usage == {"input": 10, "output": 5, "total": 15}
+    assert resp.cost_usd == 0.0012
