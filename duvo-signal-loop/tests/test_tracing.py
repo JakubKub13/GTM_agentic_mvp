@@ -96,6 +96,42 @@ def test_trace_context_uses_module_level_propagate_and_coerces_metadata(monkeypa
     assert calls[0]["metadata"] == {"dry_run": "True", "domain": "x.com"}  # str-coerced
 
 
+def test_trace_context_forwards_trace_name(monkeypatch):
+    """A trace_name, when given, is propagated so every child observation carries it."""
+    import langfuse
+
+    calls = []
+
+    def fake_propagate(**kwargs):
+        calls.append(kwargs)
+        return contextlib.nullcontext()
+
+    monkeypatch.setattr(langfuse, "propagate_attributes", fake_propagate)
+    monkeypatch.setattr(tracing, "_client", object())
+    with tracing.trace_context(
+        session_id="r1", tags=["t"], metadata={"k": "v"}, trace_name="🚀 run abc123"
+    ):
+        pass
+    assert calls[0]["trace_name"] == "🚀 run abc123"
+
+
+def test_trace_context_trace_name_defaults_to_none(monkeypatch):
+    """Omitting trace_name forwards None (langfuse drops it) — back-compatible."""
+    import langfuse
+
+    calls = []
+
+    def fake_propagate(**kwargs):
+        calls.append(kwargs)
+        return contextlib.nullcontext()
+
+    monkeypatch.setattr(langfuse, "propagate_attributes", fake_propagate)
+    monkeypatch.setattr(tracing, "_client", object())
+    with tracing.trace_context(session_id="r1", tags=[], metadata={}):
+        pass
+    assert calls[0]["trace_name"] is None
+
+
 def test_trace_context_degrades_if_propagate_raises(monkeypatch):
     import langfuse
 

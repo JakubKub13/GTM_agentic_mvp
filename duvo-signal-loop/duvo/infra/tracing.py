@@ -95,12 +95,22 @@ def span(**kwargs: Any):
         return contextlib.nullcontext()
 
 
-def trace_context(*, session_id: str, tags: list[str], metadata: dict[str, Any]):
+def trace_context(
+    *,
+    session_id: str,
+    tags: list[str],
+    metadata: dict[str, Any],
+    trace_name: str | None = None,
+):
     """Propagate trace-level attributes when enabled, else a no-op context manager.
 
     ``propagate_attributes`` is a module-level langfuse function (not a client
     method) and requires string metadata values, so values are coerced to ``str``.
-    Never raises on enter — a tracing failure must not abort the pipeline.
+    Passing ``trace_name`` stamps the trace name onto every child observation, so
+    Langfuse's observation list attributes each nested span to this one trace
+    (without it the "Trace Name" column is blank and nested account-runs look like
+    standalone traces). Never raises on enter — a tracing failure must not abort the
+    pipeline.
     """
     if _client is None:
         return contextlib.nullcontext()
@@ -111,6 +121,7 @@ def trace_context(*, session_id: str, tags: list[str], metadata: dict[str, Any])
             session_id=session_id,
             tags=tags,
             metadata={k: str(v) for k, v in metadata.items()},
+            trace_name=trace_name,
         )
     except Exception as exc:
         _log.warning("failed to propagate trace attributes: %s", exc)

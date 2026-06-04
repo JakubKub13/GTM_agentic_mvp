@@ -223,6 +223,11 @@ class TestRun:
         tc = spy.trace_contexts[0]
         assert "duvo-signal-loop" in tc["tags"]
         assert tc["session_id"] == tc["metadata"]["batch_run_id"]
+        # The run trace is explicitly named (== the run span name) so every nested
+        # account-run observation is attributed to this one trace in Langfuse's
+        # observation list (otherwise the Trace Name column is blank and the
+        # children look like standalone runs).
+        assert tc["trace_name"] == run_spans[0]["name"]
 
     async def test_limit_is_respected(self):
         from duvo.orchestrator import run

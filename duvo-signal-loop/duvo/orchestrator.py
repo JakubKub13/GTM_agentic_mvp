@@ -159,12 +159,18 @@ async def run(
     if dry_run:
         batch_tags.append("dry-run")
 
+    run_name = f"🚀 run {run_id[:8]} · {run_date}"
+
     try:
-        # One batch-level trace per run: trace_context sets the session/tags once,
-        # and the run span wraps the gather so every account-run nests under it
-        # (asyncio.gather copies the current context into each task, so the run
-        # span is the parent of each account-run). _process_account never raises
-        # (it catches + returns None), so a bare gather is safe.
+        # One batch-level trace per run: trace_context sets the session/tags/name
+        # once, and the run span wraps the gather so every account-run nests under
+        # it (asyncio.gather copies the current context into each task, so the run
+        # span is the parent of each account-run). Propagating trace_name stamps the
+        # run name onto every nested observation, so Langfuse's observation list
+        # attributes each account-run to this one trace instead of leaving the Trace
+        # Name column blank (which makes nested runs look like standalone traces).
+        # _process_account never raises (it catches + returns None), so a bare gather
+        # is safe.
         with tracing.trace_context(
             session_id=run_id,
             tags=batch_tags,
@@ -174,9 +180,10 @@ async def run(
                 "dry_run": dry_run,
                 "accounts": len(companies),
             },
+            trace_name=run_name,
         ):
             with tracing.span(
-                name=f"🚀 run {run_id[:8]} · {run_date}",
+                name=run_name,
                 as_type="chain",
                 input={"accounts": len(companies), "dry_run": dry_run},
             ) as batch_root:
