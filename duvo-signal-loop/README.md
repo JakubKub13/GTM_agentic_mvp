@@ -8,7 +8,7 @@
 [![Async](https://img.shields.io/badge/async-asyncio-1F6FEB)](https://docs.python.org/3/library/asyncio.html)
 [![httpx](https://img.shields.io/badge/HTTP-httpx-0A7E8C)](https://www.python-httpx.org/)
 [![Claude](https://img.shields.io/badge/LLM-Claude-D97757?logo=anthropic&logoColor=white)](https://www.anthropic.com/)
-[![Tests](https://img.shields.io/badge/tests-295%20passing-3FB950)](#-tests)
+[![Tests](https://img.shields.io/badge/tests-355%20passing-3FB950)](#-tests)
 [![Style](https://img.shields.io/badge/built-test--first-8957E5)](#-tests)
 
 </div>
@@ -21,7 +21,7 @@
 - ⚡ **Async-first & production-ready** — `asyncio` end-to-end, pooled `httpx` client, bounded concurrency, timeouts at every layer.
 - 🔌 **Pluggable stack** — swap LLM (Anthropic ⇄ OpenAI ⇄ local), CRM (Attio ⇄ HubSpot), and outreach (Brevo ⇄ lemlist) with a single env var.
 - 🛡️ **Bounded agency** — deterministic guards, score clamping, and a router that **never sends** without a human in the loop.
-- 🧪 **Fully tested offline** — 295 mocked tests, no API keys or network required.
+- 🧪 **Fully tested offline** — 355 mocked tests, no API keys or network required.
 - 📊 **Self-documenting runs** — every run renders an HTML audit report of decisions and agent tool calls.
 
 ---
@@ -131,6 +131,9 @@ All have sane defaults:
 | `ANTHROPIC_TIMEOUT_SECONDS` | `120` | Per LLM model-call timeout (passed to LiteLLM) |
 | `ACCOUNT_TIMEOUT_SECONDS` | `300` | Wall-clock timeout per account (stops one hung account stalling the batch) |
 | `LOG_LEVEL` | `INFO` | Logging verbosity |
+| `LANGFUSE_ENABLED` | `false` | Turn on Langfuse tracing (needs `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`); OFF keeps `--dry-run` and the offline tests key/network-free |
+| `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse ingestion endpoint |
+| `APP_ENV` | `dev` | Environment label applied to traces + run tags |
 
 ---
 
@@ -142,7 +145,7 @@ Run with `uv run` (dependencies are automatically in scope) or after activating 
 |---|---|
 | `uv run python main.py --dry-run` | Agents run and **really decide**; write-back tools simulate (safe demo fallback) |
 | `uv run python main.py --limit 3` | First 3 accounts only (fast live demo) |
-| `uv run python main.py` | Full concurrent loop with write-backs → `output/run-report.html` |
+| `uv run python main.py` | Full concurrent loop with write-backs → run-scoped report under `output/run_reports/` |
 | `uv run python main.py --concurrency 3` | Override `MAX_CONCURRENT_ACCOUNTS` for this run |
 | `uv run python main.py --test-email you@example.com` | Use your own inbox for the queued outreach lead (overrides `TEST_EMAIL`) |
 | `uv run python main.py --log-level DEBUG` | Verbose logs (every turn, tool call, and guard decision) |
@@ -169,13 +172,19 @@ Every module logs through a single `duvo.*` logger tree configured by `duvo.infr
 
 ---
 
+## 🔭 Tracing (optional)
+
+Set `LANGFUSE_ENABLED=true` (plus `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`) to emit one [Langfuse](https://langfuse.com/) trace **per run** — the batch span wraps every account-run, and each agent turn, tool call, and guard decision nests underneath as a typed span. Tracing is **OFF by default** and lives behind a single lazy boundary: only `duvo/infra/tracing.py` imports `langfuse`, so `--dry-run` and the offline test suite never import it or touch the network. The HTML report header carries the `batch_run_id` so a report links back to its trace.
+
+---
+
 ## 🧪 Tests
 
 Built test-first and runs **fully offline** — every external dependency (the LLM provider via `litellm.acompletion`, Exa, and all HTTP write-backs) is mocked, so the suite needs no API keys and makes no network calls.
 
 ```bash
 # Run tests with uv
-uv run pytest -q          # 295 tests, ~1s
+uv run pytest -q          # 355 tests, ~1s
 
 # Or activate the venv first, then run pytest directly
 source .venv/bin/activate && pytest -q
@@ -240,7 +249,8 @@ duvo-signal-loop/
 │   ├── infra/                  # cross-cutting infrastructure
 │   │   ├── logging_setup.py    # central duvo.* logger
 │   │   ├── http_client.py      # shared pooled httpx.AsyncClient — get_client() + async aclose()
-│   │   └── retry.py            # with_retries() — transient-failure retry w/ backoff for write-backs
+│   │   ├── retry.py            # with_retries() — transient-failure retry w/ backoff for write-backs
+│   │   └── tracing.py          # lazy Langfuse boundary — span()/trace_context(); OFF unless LANGFUSE_ENABLED
 │   ├── shared_agentic_tools/
 │   │   └── exa_tool.py         # shared exa_search tool (native AsyncExa client)
 │   ├── agents/

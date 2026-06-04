@@ -22,7 +22,7 @@ The package mirrors the `duvo.*` logger tree — one folder per concern:
 |---|---|---|
 | Kernel | `duvo/config.py`, `models.py`, `agent_core.py` | env/constants, the Pydantic contract, the one agent runtime |
 | Orchestration | `duvo/orchestrator.py` | semaphore-bounded `gather` → report |
-| Cross-cutting | `duvo/infra/` | `logging_setup.py`, `http_client.py` |
+| Cross-cutting | `duvo/infra/` | `logging_setup.py`, `http_client.py`, `retry.py`, `tracing.py` |
 | Shared agentic tools | `duvo/shared_agentic_tools/` | cross-agent tools such as `exa_tool.py` |
 | Agents | `duvo/agents/` | scouts, analyst, router packages with local `prompts/` and `tools/` |
 | Write-backs | `duvo/writeback/` | pluggable CRM / Slack / outreach adapters + dispatchers |
@@ -38,6 +38,7 @@ Put new code in the folder that owns its concern. Extend an existing module befo
 - **Config via env with defaults** in `config.py`. Guard a key with `require()` only when it is *always* needed before a live network call (Exa; provider-specific LLM keys are validated by the provider); leave write-back keys lazy so `--dry-run` and the offline tests work without a full `.env`.
 - **Per-task isolation.** A failing unit (account / scout beat / write-back tool) is logged and degrades to `None` / `[]` / a `failed: …` status — it never aborts the batch. See `_process_account` and `agents/scouts/isolation.py:run_scout_safe`.
 - **Bounded agency.** Guarantees live in deterministic code, not prompts (see the agent conventions).
+- **One tracing boundary.** Only `duvo/infra/tracing.py` may import `langfuse`, and it imports it lazily — tracing is OFF unless `LANGFUSE_ENABLED=true` with keys, so `--dry-run` and the offline tests never import it or hit the network. Instrument through `tracing.span()` / `tracing.trace_context()`; never import `langfuse` elsewhere.
 
 > These rules are guidance Claude reads, like CLAUDE.md — not enforcement. Guaranteed behavior belongs in code, guards, and tests.
 

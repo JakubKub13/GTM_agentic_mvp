@@ -60,10 +60,12 @@ at the repo root is a thin shim that calls `duvo.orchestrator.main`.
    and unknown tools become tool results instead of crashing; the provider-neutral
    `LLMRequest`/`Message` boundary and lazy `get_llm_provider()` lookup; the `log`
    list that captures every tool call.
-5. **`duvo/infra/http_client.py`** + **`duvo/infra/logging_setup.py`** — the shared
-   pooled `httpx.AsyncClient` singleton (drained once in the orchestrator's `finally`)
-   and the single `duvo.*` logger tree (idempotent, `propagate=False`, secrets never
-   logged).
+5. **`duvo/infra/`** — the cross-cutting layer: `http_client.py` (shared pooled
+   `httpx.AsyncClient` singleton, drained in the orchestrator's `finally`), `logging_setup.py`
+   (single `duvo.*` logger tree — idempotent, `propagate=False`, secrets never logged),
+   `retry.py` (`with_retries()` — transient-failure backoff around write-back POSTs), and
+   `tracing.py` (the lazy Langfuse boundary — OFF unless `LANGFUSE_ENABLED`; the only module
+   that imports `langfuse`, so `--dry-run` and the offline tests stay key/network-free).
 6. **`duvo/shared_agentic_tools/exa_tool.py`** — the one search tool both scouts and analyst use.
    *Extract:* the native `AsyncExa` client is awaited directly to keep the loop responsive;
    results are formatted to a compact string; failures return a string, not an exception.

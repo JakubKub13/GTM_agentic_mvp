@@ -65,7 +65,8 @@ Design choices to notice:
 - Loads `companies.csv` → `list[Company]`.
 - `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)` (default 5).
 - `asyncio.gather` over all accounts, each in `_process_account`.
-- `finally: await http_client.aclose()` — pool always drained, even if every account fails.
+- `finally:` always drains `http_client.aclose()` + `exa_tool.aclose()` and `tracing.flush()` —
+  pools closed and any buffered traces flushed even if every account fails.
 - Filters `None`, renders report.
 
 `_process_account` (`duvo/orchestrator.py:29`) — triple isolation:
@@ -170,15 +171,24 @@ Five Pydantic models are the spine every agent agrees on:
 - **`duvo/infra/logging_setup.py`** — single `duvo.*` logger tree; idempotent `configure_logging`
   (no duplicate handlers); `propagate=False`; level resolvable from string with INFO
   fallback; secrets never logged.
+- **`duvo/infra/retry.py`** — `with_retries()`: transient-failure retry (408/425/429/5xx) with
+  capped exponential backoff + jitter (`HTTP_MAX_RETRIES`), wrapped around every write-back POST.
+- **`duvo/infra/tracing.py`** — the **one tracing boundary**: the only module that imports
+  `langfuse`, lazily. OFF unless `LANGFUSE_ENABLED=true` (+ keys), so `--dry-run` and the offline
+  tests never import it or hit the network. Agents instrument through `tracing.span()` /
+  `tracing.trace_context()`; the orchestrator emits one trace per run (batch span wraps every
+  account-run) and `tracing.flush()` in its `finally`.
 - **`duvo/reporting/reporter.py`** — the only deliberately **sync** module (pure CPU + file
-  I/O, safe from async); Jinja2 autoescape; sorts accounts by score desc; writes
-  `output/run-report.html`. The template renders per account: tier badge, why-fit,
+  I/O, safe from async); Jinja2 autoescape; sorts accounts by score desc; writes a run-scoped
+  `output/run_reports/{run_date}_{run_id}-run-report.html` (falling back to `output/run-report.html`
+  when no run id) and renders `batch_run_id` in the header so a report links back to its trace.
+  The template renders per account: tier badge, why-fit,
   linked/dated signals, drafted outreach, the agent tool-call log, and the three
   write-back statuses.
 
 ## 8. Testing philosophy
 
-324 tests, fully offline — the LLM provider, Exa, and all HTTP mocked; no keys, no network.
+355 tests, fully offline — the LLM provider, Exa, and all HTTP mocked; no keys, no network.
 `asyncio_mode = auto`. `conftest.py` supplies `make_fake_async_client`, `_fake_response`,
 `make_score`. The agent-testing trick: **patch `run_agent` itself** with a fake that calls
 a chosen tool sequence — so router/analyst logic is tested deterministically without
