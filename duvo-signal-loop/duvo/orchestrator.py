@@ -3,12 +3,15 @@
 import argparse
 import asyncio
 import csv
+from datetime import UTC, datetime
+from uuid import uuid4
 
+from duvo import config
 from duvo.agents.analyst import run_analyst
 from duvo.agents.router import run_router
 from duvo.agents.scouts import scout_all
 from duvo.config import ACCOUNT_TIMEOUT_SECONDS, LOG_LEVEL, MAX_CONCURRENT_ACCOUNTS, TEST_EMAIL
-from duvo.infra import http_client
+from duvo.infra import http_client, tracing
 from duvo.infra.logging_setup import configure_logging, get_logger
 from duvo.models import Company, RunResult
 from duvo.reporting.reporter import generate_report
@@ -33,44 +36,75 @@ async def _process_account(
     dry_run: bool,
     test_email: str,
     semaphore: asyncio.Semaphore,
+    run_id: str,
+    run_date: str,
 ) -> RunResult | None:
     """Run the full pipeline for a single account inside a semaphore slot.
 
     Each account is fully isolated: any exception is logged and ``None`` is
-    returned so that a single bad account does not abort the whole batch.
+    returned so that a single bad account does not abort the whole batch. The
+    account is the root of one Langfuse trace (grouped into the batch session).
 
     Args:
-        company:   The account to process.
-        dry_run:   When True, write-back tools simulate side-effects only.
+        company:    The account to process.
+        dry_run:    When True, write-back tools simulate side-effects only.
         test_email: Outreach recipient override used in dry-run / test mode.
-        semaphore: Bounds the number of accounts processed concurrently.
+        semaphore:  Bounds the number of accounts processed concurrently.
+        run_id:     Batch run id — the Langfuse session all accounts share.
+        run_date:   ISO date of the run, recorded in trace metadata.
 
     Returns:
         A populated :class:`~models.RunResult` on success, or ``None`` on error.
     """
     log = get_logger(__name__)
     async with semaphore:
-        try:
-            async with asyncio.timeout(ACCOUNT_TIMEOUT_SECONDS):
-                agent_log: list[str] = []
-                signals = await scout_all(company, agent_log)
-                score = await run_analyst(company, signals, agent_log)
-                rr = RunResult(score=score, signals=signals)
-                await run_router(rr, dry_run, test_email, agent_log)
-                rr.agent_log = agent_log
-                log.info(
-                    "%d/10 %s conf=%s human=%s (%d signals, %d tool calls)",
-                    score.score,
-                    score.tier,
-                    score.confidence,
-                    score.needs_human_research,
-                    len(signals),
-                    len(agent_log),
-                )
-                return rr
-        except Exception as exc:
-            log.error("account %s failed: %s", company.name, exc)
-            return None
+        tags = ["duvo-signal-loop", f"model:{config.LLM_MODEL}", f"env:{config.APP_ENV}"]
+        if dry_run:
+            tags.append("dry-run")
+        metadata = {
+            "domain": company.domain,
+            "country": company.country,
+            "run_date": run_date,
+            "batch_run_id": run_id,
+            "dry_run": dry_run,
+        }
+        with tracing.trace_context(session_id=run_id, tags=tags, metadata=metadata):
+            with tracing.span(
+                name="🎯 account-run",
+                as_type="chain",
+                input={"company": company.name, "domain": company.domain},
+            ) as root:
+                try:
+                    async with asyncio.timeout(ACCOUNT_TIMEOUT_SECONDS):
+                        agent_log: list[str] = []
+                        signals = await scout_all(company, agent_log)
+                        score = await run_analyst(company, signals, agent_log)
+                        rr = RunResult(score=score, signals=signals)
+                        await run_router(rr, dry_run, test_email, agent_log)
+                        rr.agent_log = agent_log
+                        if root is not None:
+                            root.update(
+                                output={
+                                    "score": score.score,
+                                    "tier": score.tier,
+                                    "confidence": score.confidence,
+                                }
+                            )
+                        log.info(
+                            "%d/10 %s conf=%s human=%s (%d signals, %d tool calls)",
+                            score.score,
+                            score.tier,
+                            score.confidence,
+                            score.needs_human_research,
+                            len(signals),
+                            len(agent_log),
+                        )
+                        return rr
+                except Exception as exc:
+                    if root is not None:
+                        root.update(level="ERROR", status_message=str(exc))
+                    log.error("account %s failed: %s", company.name, exc)
+                    return None
 
 
 async def run(
@@ -105,7 +139,11 @@ async def run(
                      :data:`config.MAX_CONCURRENT_ACCOUNTS` when ``None``.
     """
     configure_logging(log_level)
+    tracing.init_tracing()
     log = get_logger(__name__)
+
+    run_id = uuid4().hex
+    run_date = datetime.now(UTC).date().isoformat()
 
     companies = load_companies()
     if limit is not None:
@@ -124,11 +162,12 @@ async def run(
         # _process_account never raises (it catches + returns None), so a bare gather is safe;
         # if that changes, add return_exceptions=True to avoid cancelling siblings.
         raw_results = await asyncio.gather(
-            *[_process_account(c, dry_run, test_email, sem) for c in companies]
+            *[_process_account(c, dry_run, test_email, sem, run_id, run_date) for c in companies]
         )
     finally:
         await http_client.aclose()
         await exa_tool.aclose()
+        tracing.flush()
 
     results: list[RunResult] = [r for r in raw_results if r is not None]
     path = generate_report(results)

@@ -427,6 +427,29 @@ class TestRun:
             f"Expected semaphore({cfg.MAX_CONCURRENT_ACCOUNTS}), got {captured_values}"
         )
 
+    async def test_tracing_init_and_flush_invoked(self):
+        from unittest.mock import MagicMock
+
+        from duvo.orchestrator import run
+
+        mocks = _base_patches()
+        mock_init = MagicMock()
+        mock_flush = MagicMock()
+        with (
+            patch(f"{PATCH_BASE}.load_companies", mocks["load"]),
+            patch(f"{PATCH_BASE}.scout_all", mocks["scout"]),
+            patch(f"{PATCH_BASE}.run_analyst", mocks["analyst"]),
+            patch(f"{PATCH_BASE}.run_router", mocks["router"]),
+            patch(f"{PATCH_BASE}.generate_report", mocks["report"]),
+            patch("duvo.infra.http_client.aclose", mocks["aclose"]),
+            patch(f"{PATCH_BASE}.tracing.init_tracing", mock_init),
+            patch(f"{PATCH_BASE}.tracing.flush", mock_flush),
+        ):
+            await run(dry_run=False, test_email="test@test.com", limit=None)
+
+        mock_init.assert_called_once()
+        mock_flush.assert_called_once()
+
     async def test_account_timeout_excludes_slow_account_and_calls_generate_report(self):
         """When an account's pipeline hangs beyond ACCOUNT_TIMEOUT_SECONDS, that account
         is excluded from the results but run() does not raise and generate_report is still
