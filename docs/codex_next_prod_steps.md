@@ -22,7 +22,7 @@ Implementation:
 - Render failed accounts in the HTML report.
 - Add a retry mode that reruns only failed accounts from a previous `run_id`.
 
-## 3. Add production tracing
+<!-- ## 3. Add production tracing
 
 Console logs are useful, but they are not enough to debug agent behavior in production. Langfuse would fit well because the central agent loop gives one clean instrumentation point.
 
@@ -30,7 +30,7 @@ Implementation:
 - Add one trace per account.
 - Add spans for each LLM call, tool call, Exa search, analyst guard, and write-back.
 - Attach model, latency, token usage, sanitized inputs, sanitized outputs, and final routing decision.
-- Keep tracing optional behind env vars so local tests and dry runs stay simple.
+- Keep tracing optional behind env vars so local tests and dry runs stay simple. -->
 
 ## 4. Add evals
 

@@ -11,7 +11,7 @@
 
 ## Tier 1 — blocks a trustworthy recurring run
 
-### 1. Observability / tracing (Langfuse) — missing entirely
+<!-- ### 1. Observability / tracing (Langfuse) — missing entirely
 Today there's a `duvo.*` logger tree and a per-run HTML report, but nothing giving per-account
 latency, token usage, cost, or a replayable trace of each agent's turns across runs. Critically,
 `litellm_provider._from_wire_response` (`duvo/llm/litellm_provider.py:77`) **throws away
@@ -23,7 +23,7 @@ Langfuse `@observe` span per agent, nesting tool calls as child spans. Because e
 loop, you instrument **one function** and get traces for scouts/analyst/router for free. Pass account
 name + beat as trace metadata. Gate behind a `LANGFUSE_ENABLED` env flag so `--dry-run` / offline
 tests stay network-free. Use the Langfuse SDK directly behind that one seam — don't build a custom
-tracing abstraction.
+tracing abstraction. -->
 
 ### 2. Evals — missing, and the architecture is begging for it
 All 295 tests mock `run_agent`, so they verify *plumbing* (guards fire, payloads parse) but never
