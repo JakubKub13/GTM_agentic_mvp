@@ -8,7 +8,7 @@
 [![Async](https://img.shields.io/badge/async-asyncio-1F6FEB)](https://docs.python.org/3/library/asyncio.html)
 [![httpx](https://img.shields.io/badge/HTTP-httpx-0A7E8C)](https://www.python-httpx.org/)
 [![Claude](https://img.shields.io/badge/LLM-Claude-D97757?logo=anthropic&logoColor=white)](https://www.anthropic.com/)
-[![Tests](https://img.shields.io/badge/tests-355%20passing-3FB950)](#-tests)
+[![Tests](https://img.shields.io/badge/tests-383%20passing-3FB950)](#-tests)
 [![Style](https://img.shields.io/badge/built-test--first-8957E5)](#-tests)
 
 </div>
@@ -21,7 +21,7 @@
 - ⚡ **Async-first & production-ready** — `asyncio` end-to-end, pooled `httpx` client, bounded concurrency, timeouts at every layer.
 - 🔌 **Pluggable stack** — swap LLM (Anthropic ⇄ OpenAI ⇄ local), CRM (Attio ⇄ HubSpot), and outreach (Brevo ⇄ lemlist) with a single env var.
 - 🛡️ **Bounded agency** — deterministic guards, score clamping, and a router that **never sends** without a human in the loop.
-- 🧪 **Fully tested offline** — 355 mocked tests, no API keys or network required.
+- 🧪 **Fully tested offline** — 383 mocked tests, no API keys or network required.
 - 📊 **Self-documenting runs** — every run renders an HTML audit report of decisions and agent tool calls.
 
 ---
@@ -134,6 +134,7 @@ All have sane defaults:
 | `LANGFUSE_ENABLED` | `false` | Turn on Langfuse tracing (needs `LANGFUSE_PUBLIC_KEY` + `LANGFUSE_SECRET_KEY`); OFF keeps `--dry-run` and the offline tests key/network-free |
 | `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse ingestion endpoint |
 | `APP_ENV` | `dev` | Environment label applied to traces + run tags |
+| `DUVO_DB_PATH` | `state/duvo.db` | SQLite durable run-state store path (runs, per-account outcomes, write-back events); dry-runs do not persist |
 
 ---
 
@@ -149,6 +150,8 @@ Run with `uv run` (dependencies are automatically in scope) or after activating 
 | `uv run python main.py --concurrency 3` | Override `MAX_CONCURRENT_ACCOUNTS` for this run |
 | `uv run python main.py --test-email you@example.com` | Use your own inbox for the queued outreach lead (overrides `TEST_EMAIL`) |
 | `uv run python main.py --log-level DEBUG` | Verbose logs (every turn, tool call, and guard decision) |
+| `uv run python main.py --resume <run_id>` | Re-run only the accounts that didn't finish in `<run_id>` |
+| `uv run python main.py --skip-done-today` | Skip accounts already completed today (cron-friendly) |
 
 > ⚠️ **Note:** even `--dry-run` makes **real** Exa + LLM calls (only the write-backs are simulated), so it needs a valid `EXA_API_KEY` plus the key for your `LLM_MODEL` (`ANTHROPIC_API_KEY` by default).
 
@@ -184,7 +187,7 @@ Built test-first and runs **fully offline** — every external dependency (the L
 
 ```bash
 # Run tests with uv
-uv run pytest -q          # 355 tests, ~1s
+uv run pytest -q          # 383 tests, ~2s
 
 # Or activate the venv first, then run pytest directly
 source .venv/bin/activate && pytest -q
@@ -200,6 +203,7 @@ Coverage includes:
 - ✅ every CRM/Slack/outreach adapter's request shaping and error handling
 - ✅ the orchestrator (concurrent gather, semaphore, per-account isolation, `http_client.aclose` in `finally`, `--concurrency` flag)
 - ✅ HTML report rendering
+- ✅ durable run-state store (runs, account_runs, writeback_events tables; `--resume` / `--skip-done-today` logic)
 
 ---
 
@@ -216,7 +220,7 @@ Coverage includes:
 - 🌫️ Exa noise/staleness on big brands (scout iteration + analyst verification mitigate; recall limited).
 - ⏱️ Agent loops add latency/variance; bounded by turn caps. Demo runs a few accounts live, full list pre-run.
 - 📧 No real person-level email — persona recommended; demo uses a test email as the lead.
-- 🔁 One-shot run; production = scheduled run + score diff + alert only on change. No CRM dedup yet (re-runs create new records; production would assert/upsert).
+- 🔁 Re-runs are now safe: Attio and HubSpot adapters upsert by domain (no duplicate records), and SQLite durable state (`DUVO_DB_PATH`, default `state/duvo.db`) tracks every run — `--resume <run_id>` picks up after a crash, `--skip-done-today` keeps scheduled runs idempotent, and per-run score/tier diffs are stored in `writeback_events` for future alerting. Still out of scope: Slack/outreach suppression when the score is unchanged between runs, a Postgres backend for the state store, and surfacing the score diff in the HTML report.
 
 ---
 
@@ -226,7 +230,7 @@ Coverage includes:
 - **Pooled async HTTP client** — one `httpx.AsyncClient` with `HTTP_TIMEOUT_SECONDS` timeout shared across all write-backs; gracefully closed in the orchestrator `finally`.
 - **Per-account isolation** — a failed account (network error, model/account timeout, bad JSON) is logged and excluded from the report; it never cancels other accounts or raises out of `run()`.
 - **Transient-failure retries** — write-back HTTP calls retry on 408/425/429/5xx with capped exponential backoff + jitter (`HTTP_MAX_RETRIES`); LLM calls retry via LiteLLM's `num_retries` (`LLM_MAX_RETRIES`).
-- **Next steps** — structured CRM dedup (upsert on domain) · score-diff alerting on re-runs · durable run-state for resumability.
+- **Next steps** — score-diff alerting on re-runs (suppress Slack/outreach when score is unchanged) · surfacing the diff in the HTML report · Postgres backend for the run-state store.
 
 ---
 
