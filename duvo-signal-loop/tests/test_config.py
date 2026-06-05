@@ -204,3 +204,27 @@ class TestLangfuseConfig:
 
         assert isinstance(config.LANGFUSE_PUBLIC_KEY, str)
         assert isinstance(config.LANGFUSE_SECRET_KEY, str)
+
+
+class TestDurableStateConfig:
+    """Defaults for the durable run-state store path (SQLite)."""
+
+    def test_duvo_db_path_default(self, monkeypatch):
+        """DUVO_DB_PATH defaults to state/duvo.db when the env var is absent."""
+        monkeypatch.delenv("DUVO_DB_PATH", raising=False)
+        import importlib
+
+        from duvo import config
+
+        importlib.reload(config)
+        assert config.DUVO_DB_PATH == "state/duvo.db"
+
+    def test_duvo_db_path_override(self, monkeypatch):
+        """DUVO_DB_PATH honours the env var override when set."""
+        monkeypatch.setenv("DUVO_DB_PATH", "/tmp/custom.db")
+        import importlib
+
+        from duvo import config
+
+        importlib.reload(config)
+        assert config.DUVO_DB_PATH == "/tmp/custom.db"

@@ -31,6 +31,9 @@ MAX_ANALYST_SEARCHES = 2  # hard cap on analyst verification searches
 
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
+# Durable run-state store (SQLite). Lives outside output/ (that's ephemeral reports).
+DUVO_DB_PATH = os.environ.get("DUVO_DB_PATH", "state/duvo.db")
+
 # Langfuse tracing (OFF by default — keeps --dry-run and the offline test suite key/network-free).
 LANGFUSE_ENABLED = os.environ.get("LANGFUSE_ENABLED", "false").strip().lower() == "true"
 LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
