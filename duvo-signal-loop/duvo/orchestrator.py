@@ -3,10 +3,11 @@
 import argparse
 import asyncio
 import csv
+import json
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from duvo import config
+from duvo import config, store
 from duvo.agents.analyst import run_analyst
 from duvo.agents.router import run_router
 from duvo.agents.scouts import scout_all
@@ -31,6 +32,70 @@ def load_companies(path: str = "companies.csv") -> list[Company]:
         return [Company(**row) for row in csv.DictReader(fh)]
 
 
+def _now_iso() -> str:
+    """UTC timestamp string for store rows."""
+    return datetime.now(UTC).isoformat()
+
+
+_EVENT_CHANNELS = ("crm", "slack", "outreach")
+
+
+async def _persist_success(run_id, company, rr) -> None:
+    """Mark the account done and record one write-back event per channel with the diff."""
+    log = get_logger(__name__)
+    s = rr.score
+    prev = await store.last_done_for_domain(company.domain, exclude_run_id=run_id)
+    changed = prev is None or prev["score"] != s.score or prev["tier"] != s.tier
+    prev_score = prev["score"] if prev else None
+    prev_tier = prev["tier"] if prev else None
+
+    try:
+        signals_json = json.dumps([sig.model_dump() for sig in rr.signals], ensure_ascii=False)
+        score_json = s.model_dump_json()
+    except Exception as exc:  # serialization must never abort a successful account
+        log.warning(
+            "persist: serializing result for %s failed (%s) — storing empty payloads",
+            company.domain,
+            exc,
+        )
+        signals_json, score_json = "[]", "{}"
+
+    await store.mark_status(
+        run_id=run_id,
+        domain=company.domain,
+        status="done",
+        finished_at=_now_iso(),
+        score=s.score,
+        tier=s.tier,
+        confidence=s.confidence,
+        needs_human_research=s.needs_human_research,
+        signals_count=len(rr.signals),
+        signals_json=signals_json,
+        score_json=score_json,
+        error=None,
+    )
+
+    status_by_channel = {
+        "crm": (rr.crm_status, config.CRM_PROVIDER),
+        "slack": (rr.slack_status, "slack"),
+        "outreach": (rr.outreach_status, config.OUTREACH_PROVIDER),
+    }
+    now = _now_iso()
+    for channel in _EVENT_CHANNELS:
+        status_text, provider = status_by_channel[channel]
+        await store.record_event(
+            run_id=run_id,
+            domain=company.domain,
+            channel=channel,
+            provider=provider,
+            status_text=status_text,
+            changed=changed,
+            prev_score=prev_score,
+            prev_tier=prev_tier,
+            created_at=now,
+        )
+
+
 async def _process_account(
     company: Company,
     dry_run: bool,
@@ -38,6 +103,7 @@ async def _process_account(
     semaphore: asyncio.Semaphore,
     run_id: str,
     run_date: str,
+    persist: bool,
 ) -> RunResult | None:
     """Run the full pipeline for a single account inside a semaphore slot.
 
@@ -53,6 +119,7 @@ async def _process_account(
         semaphore:  Bounds the number of accounts processed concurrently.
         run_id:     Batch run id (also the Langfuse session), recorded in span metadata.
         run_date:   ISO date of the run, recorded in span metadata.
+        persist:    When True, persist run-state rows + write-back events to the store.
 
     Returns:
         A populated :class:`~models.RunResult` on success, or ``None`` on error.
@@ -72,6 +139,15 @@ async def _process_account(
             },
         ) as root:
             try:
+                if persist:
+                    await store.upsert_account_run(
+                        run_id=run_id,
+                        domain=company.domain,
+                        company_name=company.name,
+                        country=company.country,
+                        status="running",
+                        started_at=_now_iso(),
+                    )
                 async with asyncio.timeout(ACCOUNT_TIMEOUT_SECONDS):
                     agent_log: list[str] = []
                     signals = await scout_all(company, agent_log)
@@ -79,6 +155,8 @@ async def _process_account(
                     rr = RunResult(score=score, signals=signals)
                     await run_router(rr, dry_run, test_email, agent_log)
                     rr.agent_log = agent_log
+                    if persist:
+                        await _persist_success(run_id, company, rr)
                     if root is not None:
                         root.update(
                             output={
@@ -98,6 +176,14 @@ async def _process_account(
                     )
                     return rr
             except Exception as exc:
+                if persist:
+                    await store.mark_status(
+                        run_id=run_id,
+                        domain=company.domain,
+                        status="failed",
+                        finished_at=_now_iso(),
+                        error=str(exc),
+                    )
                 if root is not None:
                     root.update(level="ERROR", status_message=str(exc))
                 log.error("account %s failed: %s", company.name, exc)
@@ -146,6 +232,19 @@ async def run(
     if limit is not None:
         companies = companies[:limit]
 
+    persist = not dry_run
+    if persist:
+        await store.start_run(
+            run_id=run_id,
+            run_date=run_date,
+            started_at=_now_iso(),
+            dry_run=dry_run,
+            concurrency=concurrency or MAX_CONCURRENT_ACCOUNTS,
+            model=config.LLM_MODEL,
+            app_env=config.APP_ENV,
+            accounts_total=len(companies),
+        )
+
     sem = asyncio.Semaphore(concurrency or MAX_CONCURRENT_ACCOUNTS)
 
     log.info(
@@ -160,6 +259,8 @@ async def run(
         batch_tags.append("dry-run")
 
     run_name = f"🚀 run {run_id[:8]} · {run_date}"
+
+    raw_results: list = []
 
     try:
         # One batch-level trace per run: trace_context sets the session/tags/name
@@ -189,23 +290,31 @@ async def run(
             ) as batch_root:
                 raw_results = await asyncio.gather(
                     *[
-                        _process_account(c, dry_run, test_email, sem, run_id, run_date)
+                        _process_account(c, dry_run, test_email, sem, run_id, run_date, persist)
                         for c in companies
                     ]
                 )
                 if batch_root is not None:
-                    ok = [r for r in raw_results if r is not None]
+                    succeeded = [r for r in raw_results if r is not None]
                     batch_root.update(
                         output={
                             "accounts": len(companies),
-                            "succeeded": len(ok),
-                            "failed": len(companies) - len(ok),
+                            "succeeded": len(succeeded),
+                            "failed": len(companies) - len(succeeded),
                         }
                     )
     finally:
         await http_client.aclose()
         await exa_tool.aclose()
         tracing.flush()
+        if not dry_run:
+            ok = sum(1 for r in raw_results if r is not None)
+            await store.finish_run(
+                run_id=run_id,
+                finished_at=_now_iso(),
+                succeeded=ok,
+                failed=len(companies) - ok,
+            )
 
     results: list[RunResult] = [r for r in raw_results if r is not None]
     path = generate_report(results, run_id=run_id, run_date=run_date)

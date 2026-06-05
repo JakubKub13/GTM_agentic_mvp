@@ -5,8 +5,24 @@ import csv
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
+from duvo import orchestrator
 from duvo.models import Company, RunResult, Signal
+from duvo.store import db as _store_db
 from tests.conftest import make_score
+
+
+@pytest.fixture(autouse=True)
+def _isolate_store_db(monkeypatch, tmp_path):
+    """Every test in this module persists to a throwaway tmp DB, never state/duvo.db."""
+    from duvo import config
+
+    monkeypatch.setattr(config, "DUVO_DB_PATH", str(tmp_path / "test.db"))
+    _store_db._INITED.clear()
+    yield
+    _store_db._INITED.clear()
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -43,6 +59,27 @@ def _write_csv(path, rows: list[dict]) -> None:
         writer = csv.DictWriter(fh, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _patch_pipeline(score):
+    """Patch the three agent stages so _process_account runs without LLM/network."""
+
+    async def fake_scout(company, log=None):
+        return []
+
+    async def fake_analyst(company, signals, log=None):
+        return score
+
+    async def fake_router(rr, dry_run, test_email, log=None):
+        rr.crm_status = "attio company rec_1 (ICP 8)"
+        rr.slack_status = "posted to #sales"
+        rr.outreach_status = "contact queued in Brevo review list 7"
+
+    return (
+        patch.object(orchestrator, "scout_all", fake_scout),
+        patch.object(orchestrator, "run_analyst", fake_analyst),
+        patch.object(orchestrator, "run_router", fake_router),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -568,3 +605,107 @@ class TestRun:
         successful_names = {rr.score.company_name for rr in results_arg}
         assert "Fast Corp" in successful_names
         assert "Slow Corp" not in successful_names
+
+
+# ---------------------------------------------------------------------------
+# Durable run-state persistence (store wiring)
+# ---------------------------------------------------------------------------
+
+
+class TestPersistence:
+    async def test_real_run_persists_run_and_account_and_events(self, monkeypatch):
+        from duvo.store import db
+
+        monkeypatch.setattr(
+            orchestrator,
+            "load_companies",
+            lambda *a, **k: [Company(name="Acme", domain="acme.com", country="US", description="")],
+        )
+        score = make_score(domain="acme.com", score=8, tier="Tier 1")
+        p1, p2, p3 = _patch_pipeline(score)
+        with p1, p2, p3:
+            await orchestrator.run(dry_run=False, test_email="t@e.com", limit=None)
+
+        run_row = await db.query_one("SELECT * FROM runs LIMIT 1")
+        assert run_row["status"] == "done"
+        assert run_row["accounts_succeeded"] == 1
+        acc = await db.query_one("SELECT * FROM account_runs WHERE domain=?", ("acme.com",))
+        assert acc["status"] == "done"
+        assert acc["score"] == 8
+        events = await db.query_all(
+            "SELECT channel, action FROM writeback_events WHERE domain=?", ("acme.com",)
+        )
+        by_channel = {e["channel"]: e["action"] for e in events}
+        assert by_channel == {"crm": "upserted", "slack": "alerted", "outreach": "queued"}
+
+    async def test_dry_run_does_not_persist(self, monkeypatch):
+        from duvo.store import db
+
+        monkeypatch.setattr(
+            orchestrator,
+            "load_companies",
+            lambda *a, **k: [Company(name="Acme", domain="acme.com", country="US", description="")],
+        )
+        score = make_score(domain="acme.com")
+        p1, p2, p3 = _patch_pipeline(score)
+        with p1, p2, p3:
+            await orchestrator.run(dry_run=True, test_email="t@e.com", limit=None)
+        assert await db.query_one("SELECT * FROM runs LIMIT 1") is None
+        assert await db.query_one("SELECT * FROM account_runs LIMIT 1") is None
+        assert await db.query_one("SELECT * FROM writeback_events LIMIT 1") is None
+
+    async def test_event_records_diff_vs_prior_run(self, monkeypatch):
+        from duvo.store import account_runs, db, runs
+
+        # Seed a prior done run with score 5.
+        await runs.start_run(
+            run_id="old",
+            run_date="2026-06-01",
+            started_at="t",
+            dry_run=False,
+            concurrency=1,
+            model="m",
+            app_env="dev",
+            accounts_total=1,
+        )
+        await account_runs.upsert_account_run(
+            run_id="old",
+            domain="acme.com",
+            company_name="Acme",
+            country="US",
+            status="running",
+            started_at="t",
+        )
+        await account_runs.mark_status(
+            run_id="old",
+            domain="acme.com",
+            status="done",
+            finished_at="2026-06-01T00:00:00Z",
+            score=5,
+            tier="Tier 2",
+            confidence="medium",
+            needs_human_research=False,
+            signals_count=0,
+            signals_json="[]",
+            score_json="{}",
+            error=None,
+        )
+
+        monkeypatch.setattr(
+            orchestrator,
+            "load_companies",
+            lambda *a, **k: [Company(name="Acme", domain="acme.com", country="US", description="")],
+        )
+        score = make_score(domain="acme.com", score=8, tier="Tier 1")  # changed
+        p1, p2, p3 = _patch_pipeline(score)
+        with p1, p2, p3:
+            await orchestrator.run(dry_run=False, test_email="t@e.com", limit=None)
+
+        ev = await db.query_one(
+            "SELECT changed, prev_score, prev_tier FROM writeback_events WHERE channel='crm' "
+            "AND domain='acme.com' AND prev_score IS NOT NULL",
+            (),
+        )
+        assert ev["changed"] == 1
+        assert ev["prev_score"] == 5
+        assert ev["prev_tier"] == "Tier 2"
