@@ -40,30 +40,57 @@ def _note_body(score: ICPScore) -> str:
     return "\n".join(lines)
 
 
-async def _create_company(score: ICPScore) -> str:
-    """POST a new company record to Attio.
+async def _find_company_id(score: ICPScore) -> str | None:
+    """Return the Attio record_id for a company matching ``domains``, or None.
 
-    Tries first with ``domains`` included.  If Attio rejects that shape (any
-    non-2xx response) it retries with ``name`` only.  Raises on two consecutive
-    failures.
-
-    Returns:
-        The Attio ``record_id`` string for the created company.
+    A non-2xx query response is treated as not-found so the write can proceed; a
+    transient lookup failure may therefore create a duplicate.
     """
+    url = f"{_BASE}/objects/companies/records/query"
+    resp = await retry.with_retries(
+        lambda: http_client.get_client().post(
+            url, headers=_headers(), json={"filter": {"domains": score.domain}, "limit": 1}
+        ),
+        max_attempts=config.HTTP_MAX_RETRIES,
+    )
+    if resp.status_code >= 300:
+        log.warning("Attio: domain query non-2xx (%s) — treating as not found", resp.status_code)
+        return None
+    data = resp.json().get("data") or []
+    if not data:
+        return None
+    return data[0]["id"]["record_id"]
+
+
+async def _patch_company(score: ICPScore, record_id: str) -> str:
+    """PATCH an existing company record's values; return its record_id.
+
+    Intentionally refreshes only ``name``; ICP score/tier are carried in the
+    evidence note, not on company fields.
+    """
+    url = f"{_BASE}/objects/companies/records/{record_id}"
+    log.info("Attio: updating existing company '%s' (record_id=%s)", score.company_name, record_id)
+    resp = await retry.with_retries(
+        lambda: http_client.get_client().patch(
+            url, headers=_headers(), json={"data": {"values": {"name": score.company_name}}}
+        ),
+        max_attempts=config.HTTP_MAX_RETRIES,
+    )
+    resp.raise_for_status()
+    return record_id
+
+
+async def _create_company(score: ICPScore) -> str:
+    """Create a new Attio company; try name+domains, fall back to name-only."""
     url = f"{_BASE}/objects/companies/records"
     log.info("Attio: creating company record for '%s' (%s)", score.company_name, score.domain)
-
     last = None
     for attempt, values in enumerate(
-        (
-            {"name": score.company_name, "domains": [score.domain]},
-            {"name": score.company_name},
-        )
+        ({"name": score.company_name, "domains": [score.domain]}, {"name": score.company_name})
     ):
         if attempt > 0:
             log.debug(
-                "Attio: first payload shape rejected — retrying with name-only for '%s'",
-                score.company_name,
+                "Attio: payload shape rejected — retrying name-only for '%s'", score.company_name
             )
         last = await retry.with_retries(
             lambda values=values: http_client.get_client().post(
@@ -75,15 +102,21 @@ async def _create_company(score: ICPScore) -> str:
             record_id: str = last.json()["data"]["id"]["record_id"]
             log.info("Attio: company record created — record_id=%s", record_id)
             return record_id
-
-    # Both attempts failed; surface the error from the last response.
     log.error(
-        "Attio: failed to create company '%s' after retry — status=%s",
+        "Attio: failed to create company '%s' — status=%s",
         score.company_name,
         last.status_code if last else "unknown",
     )
     last.raise_for_status()  # type: ignore[union-attr]
-    return ""  # unreachable; satisfies type checkers
+    return ""  # unreachable
+
+
+async def _upsert_company(score: ICPScore) -> str:
+    """Find the company by domain and PATCH it, else create it. Idempotent on re-runs."""
+    existing = await _find_company_id(score)
+    if existing:
+        return await _patch_company(score, existing)
+    return await _create_company(score)
 
 
 async def _create_note(score: ICPScore, record_id: str) -> None:
@@ -108,7 +141,7 @@ async def _create_note(score: ICPScore, record_id: str) -> None:
 
 @register_crm("attio")
 async def upsert_account(score: ICPScore) -> str:
-    """Create a company record + evidence note in Attio.
+    """Upsert a company record + evidence note in Attio.
 
     Args:
         score: Fully-populated :class:`~models.ICPScore`.
@@ -116,6 +149,6 @@ async def upsert_account(score: ICPScore) -> str:
     Returns:
         Confirmation string including the Attio record id and ICP score.
     """
-    record_id = await _create_company(score)
+    record_id = await _upsert_company(score)
     await _create_note(score, record_id)
     return f"attio company {record_id} (ICP {score.score}) + evidence note"

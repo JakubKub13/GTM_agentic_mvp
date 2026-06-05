@@ -176,10 +176,13 @@ class TestUpsertAccount:
     async def test_returns_string_with_attio_company_record_id_and_score(self, monkeypatch):
         monkeypatch.setattr(config, "ATTIO_API_KEY", "key")
         record_id = "rec_xyz789"
+        query_resp = _fake_response(200, {"data": []})  # not found → create path
         company_resp = _fake_response(200, {"data": {"id": {"record_id": record_id}}})
         note_resp = _fake_response(200)
 
-        client = make_fake_async_client(post=AsyncMock(side_effect=[company_resp, note_resp]))
+        client = make_fake_async_client(
+            post=AsyncMock(side_effect=[query_resp, company_resp, note_resp])
+        )
 
         with patch("duvo.infra.http_client.get_client", return_value=client):
             result = await attio.upsert_account(make_score())
@@ -191,33 +194,66 @@ class TestUpsertAccount:
     async def test_calls_create_note_after_company(self, monkeypatch):
         monkeypatch.setattr(config, "ATTIO_API_KEY", "key")
         record_id = "rec_order_check"
+        query_resp = _fake_response(200, {"data": []})  # not found → create path
         company_resp = _fake_response(200, {"data": {"id": {"record_id": record_id}}})
         note_resp = _fake_response(200)
 
-        client = make_fake_async_client(post=AsyncMock(side_effect=[company_resp, note_resp]))
+        client = make_fake_async_client(
+            post=AsyncMock(side_effect=[query_resp, company_resp, note_resp])
+        )
 
         with patch("duvo.infra.http_client.get_client", return_value=client):
             await attio.upsert_account(make_score())
 
-        assert client.post.call_count == 2
-        first_url = client.post.call_args_list[0][0][0]
-        second_url = client.post.call_args_list[1][0][0]
-        assert "/records" in first_url
-        assert "/notes" in second_url
+        assert client.post.call_count == 3  # query + create + note
+        query_url = client.post.call_args_list[0][0][0]
+        create_url = client.post.call_args_list[1][0][0]
+        note_url = client.post.call_args_list[2][0][0]
+        assert query_url.endswith("/records/query")
+        assert create_url.endswith("/records")
+        assert note_url.endswith("/notes")
+
+
+async def test_attio_upserts_existing_company_by_domain(monkeypatch):
+    monkeypatch.setattr(config, "ATTIO_API_KEY", "key")
+    score = make_score(domain="acme.com")
+    # query returns an existing record → PATCH, no create POST
+    query_resp = _fake_response(200, {"data": [{"id": {"record_id": "rec_existing"}}]})
+    patch_resp = _fake_response(200)
+    note_resp = _fake_response(201, {"data": {"id": {"note_id": "n1"}}})
+    client = make_fake_async_client(
+        post=AsyncMock(side_effect=[query_resp, note_resp]),  # query + note
+        patch=AsyncMock(return_value=patch_resp),
+    )
+    with patch("duvo.infra.http_client.get_client", return_value=client):
+        result = await attio.upsert_account(score)
+    client.patch.assert_awaited_once()  # updated, not duplicated
+    assert "rec_existing" in result
+
+
+async def test_attio_creates_when_not_found(monkeypatch):
+    monkeypatch.setattr(config, "ATTIO_API_KEY", "key")
+    score = make_score(domain="newco.com")
+    query_resp = _fake_response(200, {"data": []})  # not found
+    create_resp = _fake_response(201, {"data": {"id": {"record_id": "rec_new"}}})
+    note_resp = _fake_response(201, {"data": {"id": {"note_id": "n1"}}})
+    client = make_fake_async_client(
+        post=AsyncMock(side_effect=[query_resp, create_resp, note_resp]),
+        patch=AsyncMock(),
+    )
+    with patch("duvo.infra.http_client.get_client", return_value=client):
+        result = await attio.upsert_account(score)
+    client.patch.assert_not_awaited()
+    assert "rec_new" in result
 
 
 async def test_create_company_retries_on_transient_503(monkeypatch):
-    from unittest.mock import AsyncMock, patch
-
-    from duvo import config
-    from duvo.writeback import attio
-    from tests.conftest import _fake_response, make_fake_async_client, make_score
-
     monkeypatch.setattr(config, "ATTIO_API_KEY", "key")
     monkeypatch.setattr(config, "HTTP_MAX_RETRIES", 3)
-    # First call 503 (retryable), second call success with a record id, third = note.
+    # query (not found) → create 503 (retryable) → create success → note.
     post = AsyncMock(
         side_effect=[
+            _fake_response(200, {"data": []}),
             _fake_response(503),
             _fake_response(201, {"data": {"id": {"record_id": "rec_1"}}}),
             _fake_response(201, {"data": {"id": "note_1"}}),
@@ -230,4 +266,4 @@ async def test_create_company_retries_on_transient_503(monkeypatch):
     ):
         result = await attio.upsert_account(make_score())
     assert "rec_1" in result
-    assert post.call_count == 3  # 503 retry + success + note
+    assert post.call_count == 4  # query + 503 retry + create success + note
