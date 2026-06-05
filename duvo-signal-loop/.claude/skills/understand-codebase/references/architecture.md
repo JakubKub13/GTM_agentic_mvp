@@ -16,9 +16,10 @@ shim that calls `duvo.orchestrator.main` (so `uv run python main.py` and
 5. The pluggable write-back layer
 6. The data contract
 7. Cross-cutting infrastructure
-8. Testing philosophy
-9. Bounded agency — the throughline
-10. Known limits & roadmap
+8. Durable run-state store (SQLite)
+9. Testing philosophy
+10. Bounded agency — the throughline
+11. Known limits & roadmap
 
 ---
 
@@ -61,23 +62,34 @@ Design choices to notice:
 
 ## 3. The per-account pipeline (orchestration)
 
-`orchestrator.run()` (`duvo/orchestrator.py:74`):
-- Loads `companies.csv` → `list[Company]`.
-- `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)` (default 5).
+`orchestrator.run()` (`duvo/orchestrator.py:193`):
+- Loads `companies.csv` → `list[Company]`; `--limit` truncates.
+- Mints (or reuses, via `--resume <run_id>`) the `run_id`; computes the UTC `run_date`.
+- On real runs, applies the skip set: `--resume` skips domains already `done` in that
+  run_id, `--skip-done-today` skips domains already `done` for today's `run_date`
+  (`done_domains_for_run` / `done_domains_for_date`).
+- `asyncio.Semaphore(MAX_CONCURRENT_ACCOUNTS)` (default 5; overridable via `--concurrency`).
+- On real runs (`persist = not dry_run`), `store.start_run(...)` opens the `runs` row.
 - `asyncio.gather` over all accounts, each in `_process_account`.
-- `finally:` always drains `http_client.aclose()` + `exa_tool.aclose()` and `tracing.flush()` —
-  pools closed and any buffered traces flushed even if every account fails.
-- Filters `None`, renders report.
+- `finally:` always drains `http_client.aclose()` + `exa_tool.aclose()` and `tracing.flush()`,
+  and on real runs `store.finish_run(...)` records succeeded/failed counts — pools closed,
+  traces flushed, and the run closed even if every account fails.
+- Filters `None`, renders a run-scoped report.
 
-`_process_account` (`duvo/orchestrator.py:29`) — triple isolation:
+`_process_account` (`duvo/orchestrator.py:99`) — triple isolation:
 - `async with semaphore` → bounded concurrency.
 - `async with asyncio.timeout(ACCOUNT_TIMEOUT_SECONDS)` (300s) → one hung account can't
   stall the batch.
-- `try/except Exception: return None` → a bad account logs and yields `None`; never
-  cancels siblings or propagates. (Because it never raises, a bare `gather` is safe —
-  noted in a comment.)
+- `try/except Exception: return None` → a bad account logs, marks the row `failed` (real
+  runs), and yields `None`; never cancels siblings or propagates. (Because it never
+  raises, a bare `gather` is safe — noted in a comment.)
 - Chain: `scout_all` → `run_analyst` → build `RunResult` → `run_router`; a shared
   `agent_log` threads through all three and is attached to the result.
+- On real runs, `_persist_success` (`duvo/orchestrator.py:43`) marks the account `done`
+  with its score/tier/signals and writes one `writeback_events` row per channel
+  (crm/slack/outreach) carrying a **score/tier diff** vs the domain's last `done` run
+  (`changed`, `prev_score`, `prev_tier`). Serialization failures never abort a successful
+  account. Dry-runs persist nothing.
 
 ## 4. The three agent roles
 
@@ -140,11 +152,13 @@ Two dispatchers, two adapters each, swap by one env var, all sharing one HTTP po
 
 - Dispatchers read the provider **at call time** (so tests monkeypatch freely); unknown
   provider → warn + fall back to default; adapters imported lazily.
-- Adapter robustness: **Attio** tries `{name, domains}` then `name`-only; **HubSpot** does
-  a real upsert (search by domain → PATCH or POST) plus an idempotent custom-property
-  ensure; **Brevo** tries rich attributes then minimal `email + listIds`; **lemlist** posts
-  to a paused campaign with `deduplicate=true` and validates the API key before the
-  campaign id.
+- Adapter robustness + CRM dedup: **both CRM adapters upsert by domain** — **Attio**
+  queries companies by domain and PATCHes the match or creates one (`_upsert_company`),
+  with `{name, domains}` → `name`-only as the create-payload fallback, then attaches an
+  evidence note; **HubSpot** does the same search-by-domain upsert (PATCH or POST) plus an
+  idempotent custom-property ensure. So re-runs no longer create duplicate records.
+  **Brevo** tries rich attributes then minimal `email + listIds`; **lemlist** posts to a
+  paused campaign with `deduplicate=true` and validates the API key before the campaign id.
 - Shared client (`duvo/infra/http_client.py`): lazy module-level `httpx.AsyncClient` with
   uniform `HTTP_TIMEOUT_SECONDS`, drained by `aclose()` in the orchestrator's `finally`.
 
@@ -186,17 +200,50 @@ Five Pydantic models are the spine every agent agrees on:
   linked/dated signals, drafted outreach, the agent tool-call log, and the three
   write-back statuses.
 
-## 8. Testing philosophy
+## 8. Durable run-state store (SQLite)
 
-355 tests, fully offline — the LLM provider, Exa, and all HTTP mocked; no keys, no network.
+`duvo/store/` — added with the dedup/DB work, structured one-file-per-concern like
+`infra/` and `writeback/`. It makes runs observable and re-runs safe. Path is
+`config.DUVO_DB_PATH` (default `state/duvo.db`, outside the ephemeral `output/`).
+
+- **`db.py`** — the async seam over stdlib `sqlite3` (sync), so every op is offloaded via
+  `asyncio.to_thread` (the house rule for sync-only libs); the event loop never blocks.
+  Opens with WAL + `synchronous=NORMAL` + `busy_timeout=5000` so the concurrently
+  `gather`-ed account coroutines can write without "database is locked". Schema is applied
+  on first connect from `schema.sql` (idempotent `CREATE TABLE IF NOT EXISTS`). Every
+  public helper (`execute` / `query_one` / `query_all`) wraps the call in `_safe`, which
+  **logs and returns a default on any error** — exactly like `infra.tracing`, so a
+  persistence failure can never abort the pipeline.
+- **Three tables** (`schema.sql`): `runs` (one row per batch — id, date, model, env,
+  concurrency, counts, status), `account_runs` (one row per `(run_id, domain)` — status
+  `pending|running|done|failed` + score/tier/confidence/signals/error), and
+  `writeback_events` (one row per `(run_id, domain, channel)` — provider, derived action,
+  `changed` flag, `prev_score`/`prev_tier`, idempotency key `domain:channel`).
+- **`runs.py`** — `start_run` (idempotent: resume keeps the original row) / `finish_run`.
+- **`account_runs.py`** — `upsert_account_run` / `mark_status`; the read helpers that drive
+  re-run logic: `last_done_for_domain` (most recent `done` row for a domain from any *other*
+  run — feeds the diff), `done_domains_for_run` (`--resume`), `done_domains_for_date`
+  (`--skip-done-today`).
+- **`events.py`** — `record_event` (upsert on `(run_id, domain, channel)`) + `derive_action`
+  (status string → coarse ledger verb: `refused` / `failed` / `skipped`, else the channel's
+  success verb crm→`upserted`, slack→`alerted`, outreach→`queued`).
+- **Wired in the orchestrator** (`_persist_success`, real runs only — dry-runs never persist).
+  The score diff is stored in `writeback_events` for future score-change alerting; it is not
+  yet surfaced in the HTML report.
+
+## 9. Testing philosophy
+
+383 tests, fully offline — the LLM provider, Exa, and all HTTP mocked; no keys, no network.
 `asyncio_mode = auto`. `conftest.py` supplies `make_fake_async_client`, `_fake_response`,
 `make_score`. The agent-testing trick: **patch `run_agent` itself** with a fake that calls
 a chosen tool sequence — so router/analyst logic is tested deterministically without
 simulating model turns. The safety guards get the most rigor (the `sys.modules`
 import-order proof is the standout). `test_agent_core.py` covers the loop edge cases
-(final tools, max turns, tool errors, unknown tools, falsy-return non-await).
+(final tools, max turns, tool errors, unknown tools, falsy-return non-await). The durable
+store is covered too: the three tables, `--resume` / `--skip-done-today` skip logic, the
+CRM dedup adapters, and the write-back diff.
 
-## 9. Bounded agency — the throughline
+## 10. Bounded agency — the throughline
 
 The whole design refuses to trust the LLM with irreversible actions. Three deterministic
 gates, each outside the model:
@@ -207,11 +254,15 @@ gates, each outside the model:
 3. **Router tool guards** — `confident_t1` in code; send-path modules don't even import
    for non-qualifying accounts; nothing auto-sends (review list / paused campaign only).
 
-## 10. Known limits & roadmap
+## 11. Known limits & roadmap
 
 Author-flagged limits: Exa noise/staleness on big brands; agent-loop latency/variance
-(bounded by turn caps); no real person-level email (uses a test email); one-shot run with
-no CRM dedup (re-runs create duplicate records — production would upsert-on-domain and
-alert only on score *change*). Roadmap: scouts as MCP-tool agents (Apollo/LinkedIn/Gong),
+(bounded by turn caps); no real person-level email (uses a test email + plus-addressing).
+**Re-runs are now safe** — both CRM adapters upsert-on-domain (no duplicates) and the
+SQLite store tracks every run, so `--resume <run_id>` recovers from a crash and
+`--skip-done-today` keeps scheduled runs idempotent; per-run score/tier diffs are recorded
+in `writeback_events`. Still out of scope: suppressing Slack/outreach when the score is
+*unchanged* between runs, surfacing the score diff in the HTML report, and a Postgres
+backend for the run-state store. Roadmap: scouts as MCP-tool agents (Apollo/LinkedIn/Gong),
 a discovery agent for net-new accounts, a Gong call-outcome agent, a reply-handling
 agent — all keeping the `run_agent` runtime, only growing toolsets.

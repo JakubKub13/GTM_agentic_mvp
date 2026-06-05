@@ -49,8 +49,9 @@ at the repo root is a thin shim that calls `duvo.orchestrator.main`.
    "where agency is bounded" and "where it breaks" sections. Orients you fast.
 2. **`duvo/config.py`** — every env var, the `require()` pattern (required keys raise;
    write-back keys validated lazily so `--dry-run` works without a full `.env`),
-   the LLM provider/model selection, and the concurrency/timeout knobs. *Extract:*
-   what's required vs optional, and the tunable limits.
+   the LLM provider/model selection, the concurrency/timeout knobs, and `DUVO_DB_PATH`
+   (the durable run-state SQLite store, default `state/duvo.db`). *Extract:* what's
+   required vs optional, and the tunable limits.
 3. **`duvo/models.py`** — the Pydantic contract shared by all agents. *Extract:* the 4
    signal-type `Literal`s, `ICPScore.score = Field(ge=1, le=10)`, the tier/confidence
    `Literal`s. These constraints are *why* the analyst defends so hard downstream.
@@ -88,19 +89,36 @@ at the repo root is a thin shim that calls `duvo.orchestrator.main`.
 10. **`duvo/writeback/`** — the pluggable stack. Read `crm.py` and `outreach.py`
     (dispatchers: provider read at call time, unknown → warn + default), then one
     adapter pair (`attio.py`, `brevo.py`) for the payload-fallback robustness pattern.
-    `slack.py`, `hubspot.py`, `lemlist.py` follow the same shape.
+    `slack.py`, `hubspot.py`, `lemlist.py` follow the same shape. *Extract:* both CRM
+    adapters now **dedup by domain** — `attio.py` and `hubspot.py` search for an existing
+    record by domain, then PATCH it or create one (`_upsert_company`), so re-runs no
+    longer create duplicate records.
 11. **`duvo/orchestrator.py`** (entry shim: `main.py`) — the conductor. *Extract:*
     `asyncio.gather` over all accounts, `Semaphore` bound, `_process_account`'s triple
     isolation (semaphore + `asyncio.timeout` + try/except → `None`), and
-    `http_client.aclose()` in `finally`.
-12. **`duvo/reporting/reporter.py`** + **`duvo/reporting/templates/report.html`** — the
+    `http_client.aclose()` in `finally`. Also (the DB/dedup work): on real runs it
+    persists run/account state via `duvo.store` and writes a per-channel write-back
+    **event ledger with a score/tier diff** (`_persist_success`), and supports
+    `--resume <run_id>` / `--skip-done-today` to skip already-`done` domains. Dry-runs
+    never persist (`persist = not dry_run`).
+12. **`duvo/store/`** — the durable run-state layer (SQLite), added with the DB/dedup
+    work. One file per concern like `infra/`: `db.py` (sync `sqlite3` offloaded via
+    `asyncio.to_thread`, WAL + `busy_timeout`, schema-on-connect, and **every op degrades
+    to a safe default on error so persistence can never abort the pipeline**), plus
+    `runs.py` / `account_runs.py` / `events.py` over the three tables in `schema.sql`
+    (`runs`, `account_runs`, `writeback_events`). *Extract:* `last_done_for_domain`
+    (feeds the diff), `done_domains_for_run` / `done_domains_for_date` (feed `--resume` /
+    `--skip-done-today`), and `derive_action` (status string → ledger verb).
+13. **`duvo/reporting/reporter.py`** + **`duvo/reporting/templates/report.html`** — the
     only deliberately *sync* module (pure CPU/file I/O) and the audit dashboard it
-    renders.
-13. **`tests/` (skim)** — confirm the contracts. Start with `test_agent_core.py` (loop
+    renders (run-scoped under `output/run_reports/`; the score diff is not yet surfaced here).
+14. **`tests/` (skim)** — confirm the contracts. Start with `test_agent_core.py` (loop
     edge cases incl. falsy-return non-await) and `test_router.py` (the
     guard-fires-before-lazy-import proof via `sys.modules`). The pattern across
     agent tests: patch `run_agent` itself with a fake that calls a chosen tool
     sequence — so logic is tested deterministically without simulating model turns.
+    The durable store (tables, `--resume` / `--skip-done-today` skip logic, the
+    write-back diff) is covered too.
 
 ## After reading: the mental model to confirm you have
 
@@ -118,9 +136,15 @@ You understand the codebase when you can explain, from the code:
   HTTP closed in `finally`, bounded concurrency.
 - **The pluggable seam:** how `CRM_PROVIDER` / `OUTREACH_PROVIDER` swap adapters behind
   one interface, with lazy import and default-fallback.
-- **The honest limits** (no CRM dedup, one-shot, test email, Exa noise) and the roadmap.
+- **Durable state & idempotent re-runs:** how `duvo.store` (SQLite) records every run,
+  account outcome, and write-back event; how CRM adapters dedup by domain; and how
+  `--resume` / `--skip-done-today` make re-runs safe and crash-recoverable. Persistence
+  is best-effort (degrades to a safe default) and dry-runs never persist.
+- **The honest limits** (Exa noise, agent-loop latency, test email; and what's still out
+  of scope — score-unchanged suppression of Slack/outreach, surfacing the diff in the
+  HTML report, a Postgres backend) and the roadmap.
 
-If you can walk all five of those without re-opening files, you're at the target depth.
+If you can walk all six of those without re-opening files, you're at the target depth.
 For the full synthesized breakdown — module responsibilities, the guard rules spelled
 out, the data contract, testing philosophy, and known limits — read
 `references/architecture.md` (resolve it relative to this `SKILL.md`). Use it to go

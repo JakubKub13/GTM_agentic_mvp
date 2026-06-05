@@ -157,6 +157,62 @@ Run with `uv run` (dependencies are automatically in scope) or after activating 
 
 ---
 
+## 🔁 Re-running & durable state
+
+Every **real** run (not `--dry-run`) is recorded in a local SQLite store at `DUVO_DB_PATH` (default `state/duvo.db`, gitignored), and re-runs are **safe** — no duplicate CRM records, no double work. This makes the loop crash-recoverable and cron-friendly.
+
+**What gets persisted** (three tables, `--dry-run` persists nothing):
+
+| Table | One row per | Holds |
+|---|---|---|
+| `runs` | batch run | `run_id`, date, model, env, concurrency, status, succeeded/failed counts |
+| `account_runs` | (run, account) | status (`pending`/`running`/`done`/`failed`), score, tier, confidence, signals, error |
+| `writeback_events` | (run, account, channel) | CRM/Slack/outreach action + a **score/tier diff** vs the account's previous run |
+
+**CRM dedup** — both CRM adapters **upsert by domain** (search → PATCH or create), so re-running the same account updates the existing Attio/HubSpot record instead of creating a duplicate.
+
+**Common re-run workflows:**
+
+| Goal | Command |
+|---|---|
+| **Resume a crashed/partial run** — re-process only the accounts that didn't finish | `uv run python main.py --resume <run_id>` |
+| **Idempotent scheduled run** — skip accounts already completed today (safe to cron hourly) | `uv run python main.py --skip-done-today` |
+| **Fresh full run** — new `run_id`, re-scores everything (CRM dedup still prevents duplicates) | `uv run python main.py` |
+
+> 💡 **Finding the `run_id`:** every run prints `Report: output/run_reports/<run_date>_<run_id>-run-report.html` on completion — the `run_id` is the hex segment in that filename. You can also read it from the store: `sqlite3 state/duvo.db "SELECT run_id, run_date, status, accounts_succeeded, accounts_failed FROM runs ORDER BY started_at DESC LIMIT 5;"`.
+
+**Worked example — resume after a crash:**
+
+```bash
+# 1. start a full run — it crashes (or you Ctrl-C it) after some accounts finish
+uv run python main.py
+# … prints, e.g.:
+# Report: output/run_reports/2026-06-05_a3f9c1e84b7d4e2fa9c05d6e1b2f3a4c-run-report.html
+
+# 2. grab the run_id of the most recent run (the hex segment above)
+sqlite3 state/duvo.db \
+  "SELECT run_id, status, accounts_succeeded, accounts_failed FROM runs ORDER BY started_at DESC LIMIT 1;"
+# a3f9c1e84b7d4e2fa9c05d6e1b2f3a4c|running|7|0
+
+# 3. resume that exact run — only the accounts not yet 'done' are re-processed
+uv run python main.py --resume a3f9c1e84b7d4e2fa9c05d6e1b2f3a4c
+
+# (optional) inspect which accounts still need work before resuming
+sqlite3 state/duvo.db \
+  "SELECT domain, status FROM account_runs WHERE run_id='a3f9c1e84b7d4e2fa9c05d6e1b2f3a4c' ORDER BY status;"
+```
+
+`--resume` reuses the **same** `run_id`, so the original `runs` row is kept (the `start_run` insert is a no-op on conflict) and its `account_runs` are topped up in place rather than a new run being created. Combine it with `--limit` / `--concurrency` exactly as on a normal run. For scheduled jobs, prefer `--skip-done-today` (no `run_id` needed):
+
+```bash
+# cron-friendly: re-run hourly; accounts already 'done' today are skipped automatically
+uv run python main.py --skip-done-today
+```
+
+`--resume` and `--skip-done-today` apply to **real runs only** (dry-runs keep no state to resume from). The persisted score/tier diff in `writeback_events` is the foundation for *score-change* alerting (suppress Slack/outreach when nothing changed) — recorded today, not yet acted on (see [Where it breaks](#-where-it-breaks-honest-limits)).
+
+---
+
 ## ⚡ Async architecture
 
 The entire pipeline is async end-to-end:
