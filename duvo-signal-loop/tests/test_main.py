@@ -709,3 +709,85 @@ class TestPersistence:
         assert ev["changed"] == 1
         assert ev["prev_score"] == 5
         assert ev["prev_tier"] == "Tier 2"
+
+
+# ---------------------------------------------------------------------------
+# Crash-recovery flags: --resume and --skip-done-today
+# ---------------------------------------------------------------------------
+
+
+async def test_resume_skips_done_domains_for_run(monkeypatch):
+    from duvo.store import account_runs, runs
+
+    # Seed run "r-resume" with a.com already done, b.com not.
+    await runs.start_run(
+        run_id="r-resume",
+        run_date="2026-06-05",
+        started_at="t",
+        dry_run=False,
+        concurrency=1,
+        model="m",
+        app_env="dev",
+        accounts_total=2,
+    )
+    await account_runs.upsert_account_run(
+        run_id="r-resume",
+        domain="a.com",
+        company_name="A",
+        country="",
+        status="running",
+        started_at="t",
+    )
+    await account_runs.mark_status(
+        run_id="r-resume",
+        domain="a.com",
+        status="done",
+        finished_at="t2",
+        score=7,
+        tier="Tier 2",
+        confidence="high",
+        needs_human_research=False,
+        signals_count=0,
+        signals_json="[]",
+        score_json="{}",
+        error=None,
+    )
+
+    processed = []
+
+    async def fake_scout(company, log=None):
+        processed.append(company.domain)
+        return []
+
+    monkeypatch.setattr(
+        orchestrator,
+        "load_companies",
+        lambda *a, **k: [
+            Company(name="A", domain="a.com", country="", description=""),
+            Company(name="B", domain="b.com", country="", description=""),
+        ],
+    )
+    score = make_score(domain="b.com")
+    with (
+        patch.object(orchestrator, "scout_all", fake_scout),
+        patch.object(orchestrator, "run_analyst", AsyncMock(return_value=score)),
+        patch.object(orchestrator, "run_router", AsyncMock()),
+    ):
+        await orchestrator.run(
+            dry_run=False, test_email="t@e.com", limit=None, resume_run_id="r-resume"
+        )
+
+    assert processed == ["b.com"]  # a.com skipped
+
+
+def test_main_parses_resume_flags(monkeypatch):
+    captured = {}
+
+    async def fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(orchestrator, "run", fake_run)
+    monkeypatch.setattr("sys.argv", ["prog", "--resume", "abc123", "--skip-done-today"])
+    orchestrator.main()
+    assert captured["resume_run_id"] == "abc123"
+    assert captured["skip_done_today"] is True

@@ -196,6 +196,8 @@ async def run(
     limit: int | None,
     log_level: str = LOG_LEVEL,
     concurrency: int | None = None,
+    resume_run_id: str | None = None,
+    skip_done_today: bool = False,
 ) -> None:
     """Orchestrate the full pipeline for all accounts concurrently and emit an HTML report.
 
@@ -214,23 +216,35 @@ async def run(
     in a ``finally`` block — even when one or more accounts fail.
 
     Args:
-        dry_run:     When True, write-back tools simulate side-effects only.
-        test_email:  Outreach recipient override (used in dry-run / test mode).
-        limit:       If set, process only the first *limit* accounts.
-        log_level:   Logging level string (e.g. ``"INFO"``, ``"DEBUG"``).
-        concurrency: Maximum accounts processed simultaneously.  Defaults to
-                     :data:`config.MAX_CONCURRENT_ACCOUNTS` when ``None``.
+        dry_run:       When True, write-back tools simulate side-effects only.
+        test_email:    Outreach recipient override (used in dry-run / test mode).
+        limit:         If set, process only the first *limit* accounts.
+        log_level:     Logging level string (e.g. ``"INFO"``, ``"DEBUG"``).
+        concurrency:   Maximum accounts processed simultaneously.  Defaults to
+                       :data:`config.MAX_CONCURRENT_ACCOUNTS` when ``None``.
+        resume_run_id: If set, reuse this run_id and skip its already-done accounts (real runs only).
+        skip_done_today: If True, skip accounts already done for today's run_date (real runs only).
     """
     configure_logging(log_level)
     tracing.init_tracing()
     log = get_logger(__name__)
 
-    run_id = uuid4().hex
+    run_id = resume_run_id or uuid4().hex
     run_date = datetime.now(UTC).date().isoformat()
 
     companies = load_companies()
     if limit is not None:
         companies = companies[:limit]
+
+    if not dry_run and (resume_run_id or skip_done_today):
+        skip: set[str] = set()
+        if resume_run_id:
+            skip |= await store.done_domains_for_run(resume_run_id)
+        if skip_done_today:
+            skip |= await store.done_domains_for_date(run_date)
+        before = len(companies)
+        companies = [c for c in companies if c.domain not in skip]
+        log.info("resume: skipping %d already-done account(s)", before - len(companies))
 
     persist = not dry_run
     if persist:
@@ -359,6 +373,17 @@ def main() -> None:
             "(default: MAX_CONCURRENT_ACCOUNTS from .env, currently %(default)s)"
         ),
     )
+    ap.add_argument(
+        "--resume",
+        dest="resume_run_id",
+        default=None,
+        help="resume an existing run_id: skip its already-done accounts (real runs only)",
+    )
+    ap.add_argument(
+        "--skip-done-today",
+        action="store_true",
+        help="skip accounts already marked done for today's run_date (cron convenience)",
+    )
     args = ap.parse_args()
     asyncio.run(
         run(
@@ -367,6 +392,8 @@ def main() -> None:
             limit=args.limit,
             log_level=args.log_level,
             concurrency=args.concurrency,
+            resume_run_id=args.resume_run_id,
+            skip_done_today=args.skip_done_today,
         )
     )
 
