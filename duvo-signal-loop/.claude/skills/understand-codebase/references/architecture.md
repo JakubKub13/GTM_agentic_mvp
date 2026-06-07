@@ -5,7 +5,8 @@ The code is the source of truth; if this drifts, trust the code and flag the dri
 
 The runtime lives under the `duvo/` package; `main.py` at the repo root is a thin
 shim that calls `duvo.orchestrator.main` (so `uv run python main.py` and
-`python -m duvo.orchestrator` both work).
+`python -m duvo.orchestrator` both work). `duvo/api/` is a second entry surface — a
+FastAPI app that serves a Vite/React SPA (`frontend/`) over the *same* orchestrator.
 
 ## Table of contents
 
@@ -17,9 +18,10 @@ shim that calls `duvo.orchestrator.main` (so `uv run python main.py` and
 6. The data contract
 7. Cross-cutting infrastructure
 8. Durable run-state store (SQLite)
-9. Testing philosophy
-10. Bounded agency — the throughline
-11. Known limits & roadmap
+9. The web console (FastAPI API + React SPA)
+10. Testing philosophy
+11. Bounded agency — the throughline
+12. Known limits & roadmap
 
 ---
 
@@ -62,7 +64,7 @@ Design choices to notice:
 
 ## 3. The per-account pipeline (orchestration)
 
-`orchestrator.run()` (`duvo/orchestrator.py:193`):
+`orchestrator.run()` (`duvo/orchestrator.py:398`):
 - Loads `companies.csv` → `list[Company]`; `--limit` truncates.
 - Mints (or reuses, via `--resume <run_id>`) the `run_id`; computes the UTC `run_date`.
 - On real runs, applies the skip set: `--resume` skips domains already `done` in that
@@ -76,7 +78,7 @@ Design choices to notice:
   traces flushed, and the run closed even if every account fails.
 - Filters `None`, renders a run-scoped report.
 
-`_process_account` (`duvo/orchestrator.py:99`) — triple isolation:
+`_process_account` (`duvo/orchestrator.py:169`) — triple isolation:
 - `async with semaphore` → bounded concurrency.
 - `async with asyncio.timeout(ACCOUNT_TIMEOUT_SECONDS)` (300s) → one hung account can't
   stall the batch.
@@ -85,7 +87,7 @@ Design choices to notice:
   raises, a bare `gather` is safe — noted in a comment.)
 - Chain: `scout_all` → `run_analyst` → build `RunResult` → `run_router`; a shared
   `agent_log` threads through all three and is attached to the result.
-- On real runs, `_persist_success` (`duvo/orchestrator.py:43`) marks the account `done`
+- On real runs, `_persist_success` (`duvo/orchestrator.py:105`) marks the account `done`
   with its score/tier/signals and writes one `writeback_events` row per channel
   (crm/slack/outreach) carrying a **score/tier diff** vs the domain's last `done` run
   (`changed`, `prev_score`, `prev_tier`). Serialization failures never abort a successful
@@ -192,6 +194,15 @@ Five Pydantic models are the spine every agent agrees on:
   tests never import it or hit the network. Agents instrument through `tracing.span()` /
   `tracing.trace_context()`; the orchestrator emits one trace per run (batch span wraps every
   account-run) and `tracing.flush()` in its `finally`.
+- **`duvo/infra/events.py`** — the **one live-feed boundary**: an in-process pub/sub bus for the
+  web SSE stream, with the same on/off shape as tracing. `publish(run_id, event)` is a **no-op when
+  no subscriber is registered** (the CLI/offline guarantee), and on a full bounded queue it *drops*
+  the event rather than awaiting the producer — no backpressure into the pipeline. Producers stamp
+  events through a `contextvars` context (`set_context(run_id, account)` in `_process_account`,
+  `enrich_context(agent=…, beat=…)` in each agent) so no agent signatures change and tags stay
+  isolated across `asyncio.gather`. Events are bounded + redacted: `make_tool_event` runs args
+  through `agent_core._short` + `tracing._mask`, so a `tool` event never carries raw arguments.
+  Three event types flow: `tool`, `account` (status + terminal score/tier), `status` (run-level).
 - **`duvo/reporting/reporter.py`** — the only deliberately **sync** module (pure CPU + file
   I/O, safe from async); Jinja2 autoescape; sorts accounts by score desc; writes a run-scoped
   `output/run_reports/{run_date}_{run_id}-run-report.html` (falling back to `output/run-report.html`
@@ -227,13 +238,54 @@ Five Pydantic models are the spine every agent agrees on:
 - **`events.py`** — `record_event` (upsert on `(run_id, domain, channel)`) + `derive_action`
   (status string → coarse ledger verb: `refused` / `failed` / `skipped`, else the channel's
   success verb crm→`upserted`, slack→`alerted`, outreach→`queued`).
-- **Wired in the orchestrator** (`_persist_success`, real runs only — dry-runs never persist).
-  The score diff is stored in `writeback_events` for future score-change alerting; it is not
-  yet surfaced in the HTML report.
+- **Wired in the orchestrator** (`_persist_success`, real runs only — dry-runs never persist on
+  the CLI). The score diff is stored in `writeback_events` for future score-change alerting; it is
+  not yet surfaced in the HTML report.
 
-## 9. Testing philosophy
+## 9. The web console (FastAPI API + React SPA)
 
-383 tests, fully offline — the LLM provider, Exa, and all HTTP mocked; no keys, no network.
+A second entry surface over the *same* `orchestrator.run(...)`: a single FastAPI process that both
+exposes the run API and serves the built SPA. Nothing here forks the pipeline — it adds auth,
+durable run-state (§8), and a live feed (`infra/events.py`, §7).
+
+- **`duvo/api/app.py`** — `create_app()` is the app factory (mounted by uvicorn `--factory`). The
+  lifespan owns process-level setup/teardown: configure logging + tracing, sweep stale `running`
+  rows to `interrupted` on boot, and on shutdown drain `jobs`, close the shared http/Exa clients,
+  and flush tracing. The SPA is mounted **last** from `DUVO_FRONTEND_DIR` (default `frontend/dist/`)
+  with an `index.html` fallback for client-side routes; a missing build dir is tolerated (API-only).
+- **`duvo/api/auth.py`** — Google SSO (`authlib`) + signed session/CSRF cookies (`itsdangerous`).
+  **Auth env is read lazily here, not in `config.py`**, so the app imports and the offline tests run
+  without secrets. `get_current_user` guards every non-auth route; `require_csrf` is a double-submit
+  guard on state-changing routes; `require_real_run_authorization(user, confirm)` is the **#14 gate**
+  — a non-dry run needs an allowlisted role (`AUTH_REAL_RUN_ROLES`, default `admin,operator`) **and**
+  an explicit `confirm`, else 403 before any persistence. This is the web mirror of the router's
+  bounded-agency guard: the dangerous default is refusal, enforced in code.
+- **`duvo/api/routes_runs.py`** — `POST /runs` runs a strict preflight (`start_run_strict`: the run
+  row + all `pending` accounts in one transaction, re-raising → no phantom 201) then spawns
+  `asyncio.create_task(run(..., persist=True, manage_clients=False, triggered_by=user.email))`. Read
+  endpoints (`GET /runs`, `/runs/{id}`, `/runs/{id}/accounts/{domain}`) are served from `store/queries.py`.
+  The **SSE** `GET /runs/{id}/stream` subscribes to the event bus, **replays the persisted snapshot**
+  (one `account` event per row + a `status` event), then forwards live `tool`/`account`/`status`
+  events until terminal. Tool events are **live-only — never persisted** (MVP semantics); the durable
+  record of an account's tool calls is `account_runs.agent_log_json`.
+- **`duvo/api/jobs.py`** — the in-process `run_id → asyncio.Task` registry. A done-callback marks a
+  crashed/cancelled task's run `failed`/`interrupted` (it can't clobber a terminal status). This
+  registry + the in-process event bus are **why the app must run `--workers 1`**.
+- **Event production seam** — `agent_core` publishes a `tool` event at each tool call (guarded by
+  `events.get_context().get("run_id")`, so it's inert on the CLI); the orchestrator publishes
+  `account` (running/terminal) and run-level `status` events. The context is set once per account
+  and enriched per agent — no agent signature changes.
+- **`frontend/`** — Vite + React 18 + TypeScript (strict) + Tailwind + shadcn/ui + TanStack Query +
+  React Router, managed with **pnpm**, built to `dist/`. One typed client (`src/lib/api.ts`) is the
+  whole backend contract (fetch with `credentials: 'include'` + CSRF echo; `EventSource` for the
+  stream). Features: `new-run` (the launch form + the #14 confirm dialog), `live-run` (the
+  `useRunStream` hook — snapshot then SSE, with a polling fallback), and `account-detail` (the
+  drill-down drawer). Shared chrome lives in `components/{shell,common,ui}`, auth in `auth/`.
+
+## 10. Testing philosophy
+
+518 Python tests + 25 frontend Vitest suites, fully offline — the LLM provider, Exa, all HTTP, and
+(on the frontend) the api client / `EventSource` mocked; no keys, no network.
 `asyncio_mode = auto`. `conftest.py` supplies `make_fake_async_client`, `_fake_response`,
 `make_score`. The agent-testing trick: **patch `run_agent` itself** with a fake that calls
 a chosen tool sequence — so router/analyst logic is tested deterministically without
@@ -241,9 +293,12 @@ simulating model turns. The safety guards get the most rigor (the `sys.modules`
 import-order proof is the standout). `test_agent_core.py` covers the loop edge cases
 (final tools, max turns, tool errors, unknown tools, falsy-return non-await). The durable
 store is covered too: the three tables, `--resume` / `--skip-done-today` skip logic, the
-CRM dedup adapters, and the write-back diff.
+CRM dedup adapters, and the write-back diff. The web layer has its own suites —
+`test_api_*` (app factory, auth + the #14 gate, run launch, the SSE stream, the jobs registry),
+`test_infra_events` / `test_event_wiring` (the bus + producer context) — and the React SPA runs
+offline **Vitest** suites under `frontend/src/**` (`pnpm test`), mocking the api client / `EventSource`.
 
-## 10. Bounded agency — the throughline
+## 11. Bounded agency — the throughline
 
 The whole design refuses to trust the LLM with irreversible actions. Three deterministic
 gates, each outside the model:
@@ -253,8 +308,11 @@ gates, each outside the model:
    hallucinated confidence.
 3. **Router tool guards** — `confident_t1` in code; send-path modules don't even import
    for non-qualifying accounts; nothing auto-sends (review list / paused campaign only).
+4. **Web #14 gate** — a real (non-dry) run from the API needs an allowlisted role *and* an
+   explicit `confirm`, enforced in `api/auth.py` before any persistence (the UI confirm dialog
+   is a second layer, not a replacement). Same principle: irreversible actions are code-gated.
 
-## 11. Known limits & roadmap
+## 12. Known limits & roadmap
 
 Author-flagged limits: Exa noise/staleness on big brands; agent-loop latency/variance
 (bounded by turn caps); no real person-level email (uses a test email + plus-addressing).

@@ -2,13 +2,14 @@
 
 # 🛰️ duvo-signal-loop
 
-**A team of tool-using AI agents that turns a target list of retail/CPG accounts into rep-ready pipeline** — scouting intent signals, scoring ICP fit, and routing accounts into your sales stack.
+**A team of tool-using AI agents that turns a target list of retail/CPG accounts into rep-ready pipeline** — scouting intent signals, scoring ICP fit, and routing accounts into your sales stack. Drive it from the CLI or a **live web console**.
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)](https://www.python.org/)
 [![Async](https://img.shields.io/badge/async-asyncio-1F6FEB)](https://docs.python.org/3/library/asyncio.html)
-[![httpx](https://img.shields.io/badge/HTTP-httpx-0A7E8C)](https://www.python-httpx.org/)
+[![FastAPI](https://img.shields.io/badge/API-FastAPI-009688?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/SPA-React%2BVite-61DAFB?logo=react&logoColor=white)](https://react.dev/)
 [![Claude](https://img.shields.io/badge/LLM-Claude-D97757?logo=anthropic&logoColor=white)](https://www.anthropic.com/)
-[![Tests](https://img.shields.io/badge/tests-383%20passing-3FB950)](#-tests)
+[![Tests](https://img.shields.io/badge/tests-518%20py%20%2B%2025%20web-3FB950)](#-tests)
 [![Style](https://img.shields.io/badge/built-test--first-8957E5)](#-tests)
 
 </div>
@@ -19,9 +20,11 @@
 
 - 🤖 **Multi-agent by design** — scouts → analyst → router, each a real tool-using agent on one shared loop.
 - ⚡ **Async-first & production-ready** — `asyncio` end-to-end, pooled `httpx` client, bounded concurrency, timeouts at every layer.
+- 🖥️ **Live web console** — a FastAPI + React (Vite) single-page app: launch a run, watch accounts stream `pending → running → done` over SSE, drill into each account's signals, score, and tool calls. Google-SSO gated; served from the same single process.
 - 🔌 **Pluggable stack** — swap LLM (Anthropic ⇄ OpenAI ⇄ local), CRM (Attio ⇄ HubSpot), and outreach (Brevo ⇄ lemlist) with a single env var.
-- 🛡️ **Bounded agency** — deterministic guards, score clamping, and a router that **never sends** without a human in the loop.
-- 🧪 **Fully tested offline** — 383 mocked tests, no API keys or network required.
+- 🛡️ **Bounded agency** — deterministic guards, score clamping, a router that **never sends** without a human in the loop, and a role-gated confirm before any real (non-dry) web run.
+- 💾 **Durable & crash-recoverable** — every real run is recorded in SQLite; `--resume` picks up after a crash, CRM adapters dedup by domain, and runs are observable in the console.
+- 🧪 **Fully tested offline** — 518 mocked Python tests + 25 Vitest suites, no API keys or network required.
 - 📊 **Self-documenting runs** — every run renders an HTML audit report of decisions and agent tool calls.
 
 ---
@@ -45,7 +48,9 @@ flowchart LR
     PIPE --> REP[📊 HTML report]
 ```
 
-Every agent runs on one shared async tool-use loop (`duvo.agent_core.run_agent`) backed by a **pluggable LLM provider** (LiteLLM by default — Anthropic, OpenAI, or a local model, selected via `LLM_MODEL`); only `duvo/llm/litellm_provider.py` touches the wire format. Write-backs (`crm`, `slack`, `outreach`) share a single **`httpx.AsyncClient`** via `duvo.infra.http_client.get_client()` — one connection pool for the whole process. `duvo.orchestrator` only orchestrates the hand-offs (reached through the thin `main.py` entry shim).
+Every agent runs on one shared async tool-use loop (`duvo.agent_core.run_agent`) backed by a **pluggable LLM provider** (LiteLLM by default — Anthropic, OpenAI, or a local model, selected via `LLM_MODEL`); only `duvo/llm/litellm_provider.py` touches the wire format. Write-backs (`crm`, `slack`, `outreach`) share a single **`httpx.AsyncClient`** via `duvo.infra.http_client.get_client()` — one connection pool for the whole process. `duvo.orchestrator` only orchestrates the hand-offs.
+
+**Two entry surfaces, one orchestrator.** The same `orchestrator.run(...)` is driven either from the **CLI** (`main.py` → `duvo.orchestrator:main`) or the **web console** (`duvo/api/` — a FastAPI app that serves a Vite/React SPA from `frontend/`). The web path layers on Google-SSO auth, durable SQLite run-state (`duvo/store/`), and a live SSE feed (`duvo/infra/events.py`) — but it never forks the pipeline. See [Web console](#-web-console) below.
 
 ---
 
@@ -136,6 +141,8 @@ All have sane defaults:
 | `APP_ENV` | `dev` | Environment label applied to traces + run tags |
 | `DUVO_DB_PATH` | `state/duvo.db` | SQLite durable run-state store path (runs, per-account outcomes, write-back events); dry-runs do not persist |
 
+**Web console env** (only needed to run the API; the CLI ignores them) lives in the **API & auth** block of `.env.example`: `SESSION_SECRET` (required to boot past `/me` — signs the session/CSRF cookies), `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` (OAuth), `AUTH_ALLOWED_DOMAINS` / `AUTH_ALLOWED_EMAILS` (login allowlist), `AUTH_REAL_RUN_ROLES` (default `admin,operator`), `AUTH_COOKIE_INSECURE` (`true` for local http), and `DUVO_FRONTEND_DIR` (default `frontend/dist`). These are read lazily in `duvo/api/auth.py`, so the app and the offline tests import without them.
+
 ---
 
 ## ▶️ Run
@@ -154,6 +161,41 @@ Run with `uv run` (dependencies are automatically in scope) or after activating 
 | `uv run python main.py --skip-done-today` | Skip accounts already completed today (cron-friendly) |
 
 > ⚠️ **Note:** even `--dry-run` makes **real** Exa + LLM calls (only the write-backs are simulated), so it needs a valid `EXA_API_KEY` plus the key for your `LLM_MODEL` (`ANTHROPIC_API_KEY` by default).
+
+---
+
+## 🖥️ Web console
+
+A FastAPI backend + a Vite/React single-page app give the pipeline a live UI: start a run from a form, watch every account stream `pending → running → done/failed` over **Server-Sent Events**, and drill into each account's signals, ICP score, outreach draft, and tool-call log. The backend serves the built SPA, so it's **one process, one port**.
+
+```bash
+# 1. build the SPA (pnpm) — output lands in frontend/dist/, which the API serves
+cd frontend && pnpm install && pnpm build && cd ..
+
+# 2. run the single-process server (factory app, ONE worker — see note)
+uv run uvicorn duvo.api.app:create_app --factory --host 127.0.0.1 --port 8000 --workers 1
+```
+
+Open `http://127.0.0.1:8000`. The app gates every route behind a **Google-SSO session cookie** (`SESSION_SECRET` + `GOOGLE_CLIENT_*` in `.env`); see the **API & auth** block in `.env.example`. For local manual testing there's a dev-login bypass that mints a session cookie directly — the `.claude/skills/e2e-test-setup` skill automates the whole `.env → build → server → signed-in browser` chain.
+
+| Surface | Endpoint(s) | Purpose |
+|---|---|---|
+| **New run** | `POST /runs` (multipart) | Launch a run (CSV upload or repo default), dry-run toggle, concurrency, test email |
+| **Live run** | `GET /runs/{id}` + `GET /runs/{id}/stream` (SSE) | Snapshot + live `account`/`tool`/`status` events |
+| **Account drill-down** | `GET /runs/{id}/accounts/{domain}` | Score, signals, outreach draft, agent log + a score/tier **diff** vs the account's last real run |
+| **Auth** | `GET /auth/login` · `GET /auth/callback` · `GET /me` · `POST /auth/logout` | Google OAuth + session/CSRF cookies; `/me` returns role + `can_real_run` |
+
+**Real runs are role-gated (#14).** Flipping **Dry run OFF** in the UI surfaces a confirm dialog, and the server independently requires an allowlisted role (`AUTH_REAL_RUN_ROLES`, default `admin,operator`) **and** an explicit `confirm` flag before it writes to the CRM or posts to Slack — a 403 otherwise, before anything persists.
+
+> ⚠️ **Single worker only.** The in-process run/task registry (`duvo/api/jobs.py`) and the live event bus (`duvo/infra/events.py`) are per-process, so a second uvicorn worker wouldn't see them. Always run `--workers 1`. The live **tool-call** feed is ephemeral (live-only, not replayed for a finished run); the durable record of an account's tool calls is its `agent_log_json`, shown in the drill-down drawer and the HTML report.
+
+**Frontend dev loop** (hot reload against a running backend):
+
+```bash
+cd frontend
+pnpm dev      # Vite dev server on :5173, proxies /runs /auth /me to the backend
+pnpm test     # 25 Vitest + Testing-Library suites, fully offline
+```
 
 ---
 
@@ -239,14 +281,17 @@ Set `LANGFUSE_ENABLED=true` (plus `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY`)
 
 ## 🧪 Tests
 
-Built test-first and runs **fully offline** — every external dependency (the LLM provider via `litellm.acompletion`, Exa, and all HTTP write-backs) is mocked, so the suite needs no API keys and makes no network calls.
+Built test-first and runs **fully offline** — every external dependency (the LLM provider via `litellm.acompletion`, Exa, all HTTP write-backs, and on the frontend the API client / `EventSource`) is mocked, so the suite needs no API keys and makes no network calls.
 
 ```bash
-# Run tests with uv
-uv run pytest -q          # 383 tests, ~2s
+# Python suite (uv)
+uv run pytest -q          # 518 tests, ~2s
 
 # Or activate the venv first, then run pytest directly
 source .venv/bin/activate && pytest -q
+
+# Frontend suite (Vitest + Testing Library, jsdom)
+cd frontend && pnpm test  # 25 suites
 ```
 
 Coverage includes:
@@ -259,7 +304,9 @@ Coverage includes:
 - ✅ every CRM/Slack/outreach adapter's request shaping and error handling
 - ✅ the orchestrator (concurrent gather, semaphore, per-account isolation, `http_client.aclose` in `finally`, `--concurrency` flag)
 - ✅ HTML report rendering
-- ✅ durable run-state store (runs, account_runs, writeback_events tables; `--resume` / `--skip-done-today` logic)
+- ✅ durable run-state store (runs, account_runs, writeback_events tables; `queries.py` snapshots; `--resume` / `--skip-done-today` logic)
+- ✅ the web API — app factory, auth/session/CSRF + the #14 real-run gate, run launch, the SSE stream, the in-process job registry, and the event-bus wiring
+- ✅ the React SPA — auth guard, new-run form, live-run stream hook, account drawer, and the typed API client (Vitest)
 
 ---
 
@@ -310,7 +357,8 @@ duvo-signal-loop/
 │   │   ├── logging_setup.py    # central duvo.* logger
 │   │   ├── http_client.py      # shared pooled httpx.AsyncClient — get_client() + async aclose()
 │   │   ├── retry.py            # with_retries() — transient-failure retry w/ backoff for write-backs
-│   │   └── tracing.py          # lazy Langfuse boundary — span()/trace_context(); OFF unless LANGFUSE_ENABLED
+│   │   ├── tracing.py          # lazy Langfuse boundary — span()/trace_context(); OFF unless LANGFUSE_ENABLED
+│   │   └── events.py           # in-process live-feed event bus (no-op without subscribers; powers the SSE feed)
 │   ├── shared_agentic_tools/
 │   │   └── exa_tool.py         # shared exa_search tool (native AsyncExa client)
 │   ├── agents/
@@ -325,17 +373,39 @@ duvo-signal-loop/
 │   │   ├── slack.py            # async Tier-1 #sales alert
 │   │   ├── outreach.py         # async outreach dispatcher → registry (brevo | lemlist)
 │   │   └── brevo.py / lemlist.py   # @register_outreach adapters
-│   └── reporting/
-│       ├── reporter.py         # sync HTML audit report (pure CPU/file — no async needed)
-│       └── templates/report.html
+│   ├── reporting/
+│   │   ├── reporter.py         # sync HTML audit report (pure CPU/file — no async needed)
+│   │   └── templates/report.html
+│   ├── store/                  # durable run-state (SQLite) — async seam over stdlib sqlite3
+│   │   ├── db.py               # to_thread offload, WAL + busy_timeout, schema-on-connect, ops degrade to safe defaults
+│   │   ├── schema.sql          # runs · account_runs · writeback_events (PRAGMA user_version migrations)
+│   │   ├── runs.py             # start_run / start_run_strict / finish_run / sweep_interrupted_runs
+│   │   ├── account_runs.py     # upsert_account_run / mark_status + resume/diff read helpers
+│   │   ├── events.py           # writeback_events ledger — record_event / derive_action / idempotency
+│   │   └── queries.py          # read-side snapshots backing the web API (list_runs / get_run / get_account_detail)
+│   └── api/                    # FastAPI web layer (serves the SPA + the run console) — run with --workers 1
+│       ├── app.py              # create_app() factory + lifespan + SPA static mount
+│       ├── auth.py             # Google SSO + signed session/CSRF cookies + the #14 real-run gate
+│       ├── routes_runs.py      # POST /runs, GET /runs/{id}, /accounts/{domain}, SSE /runs/{id}/stream
+│       └── jobs.py             # in-process run/task registry (single-worker)
+├── frontend/                   # Vite + React + TS + Tailwind SPA (pnpm) — built to frontend/dist/, served by the API
+│   ├── src/
+│   │   ├── lib/api.ts          # the single typed backend contract (fetch + SSE)
+│   │   ├── auth/               # AuthGuard, useMe (GET /me), login redirect
+│   │   ├── components/         # shell (layout/login) · common (toast/dialog) · ui (shadcn primitives)
+│   │   └── features/           # new-run · live-run (useRunStream + SSE) · account-detail (drawer)
+│   ├── package.json            # scripts: dev / build / test (Vitest) ; vite.config.ts / tailwind.config.js
+│   └── dist/                   # production build (gitignored)
 ├── main.py                     # thin entry shim → duvo.orchestrator:main (keeps `python main.py` working)
 ├── companies.csv               # input target list
+├── scripts/build_agents_md.py  # regenerates AGENTS.md from .claude/rules/ (Codex/Claude share one source)
 ├── pyproject.toml              # deps + pytest + ruff config (uv-managed; lockfile in uv.lock)
 ├── tests/                      # pytest suite (fully mocked, no keys/network, asyncio_mode=auto)
+├── state/                      # SQLite durable run-state (gitignored; DUVO_DB_PATH)
 └── output/                     # generated reports (gitignored)
 ```
 
-> Each folder groups one functional concern: the package root holds the shared kernel (`config`, `models`, `agent_core`) and the `orchestrator`; `infra/` cross-cutting infrastructure; `shared_agentic_tools/` cross-agent tools; `agents/` the scout, analyst, and router packages (with agent-specific prompts and tools inside each package); `writeback/` the pluggable sales-stack adapters; `reporting/` the HTML audit report.
+> Each folder groups one functional concern: the package root holds the shared kernel (`config`, `models`, `agent_core`) and the `orchestrator`; `infra/` cross-cutting infrastructure (incl. the live-feed `events.py`); `shared_agentic_tools/` cross-agent tools; `agents/` the scout, analyst, and router packages (with agent-specific prompts and tools inside each package); `writeback/` the pluggable sales-stack adapters; `reporting/` the HTML audit report; `store/` the durable SQLite run-state; and `api/` the FastAPI web layer that serves the React SPA in `frontend/`. The CLI (`main.py`) and the web app are **two entry surfaces over the same `orchestrator.run(...)`**.
 
 <div align="center">
 <sub>Built with Claude · async-first · human-in-the-loop by design</sub>

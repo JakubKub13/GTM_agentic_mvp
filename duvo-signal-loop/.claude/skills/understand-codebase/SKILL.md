@@ -41,9 +41,10 @@ as variations on them.
 ## Reading order (do this, in this order)
 
 Read bottom-up: contract and runtime first, then the agents that ride on them, then
-orchestration. Each step says *why it comes here* and *what to extract*. Open the
-files directly — most are short. The runtime lives under the `duvo/` package; `main.py`
-at the repo root is a thin shim that calls `duvo.orchestrator.main`.
+orchestration, and finally the two entry surfaces that drive it (the CLI and the web app).
+Each step says *why it comes here* and *what to extract*. Open the files directly — most are
+short. The runtime lives under the `duvo/` package; `main.py` at the repo root is a thin shim
+that calls `duvo.orchestrator.main`, and `duvo/api/` is the web app over the same orchestrator.
 
 1. **`README.md`** — the author's own framing, the architecture diagram, the
    "where agency is bounded" and "where it breaks" sections. Orients you fast.
@@ -64,9 +65,12 @@ at the repo root is a thin shim that calls `duvo.orchestrator.main`.
 5. **`duvo/infra/`** — the cross-cutting layer: `http_client.py` (shared pooled
    `httpx.AsyncClient` singleton, drained in the orchestrator's `finally`), `logging_setup.py`
    (single `duvo.*` logger tree — idempotent, `propagate=False`, secrets never logged),
-   `retry.py` (`with_retries()` — transient-failure backoff around write-back POSTs), and
+   `retry.py` (`with_retries()` — transient-failure backoff around write-back POSTs),
    `tracing.py` (the lazy Langfuse boundary — OFF unless `LANGFUSE_ENABLED`; the only module
-   that imports `langfuse`, so `--dry-run` and the offline tests stay key/network-free).
+   that imports `langfuse`, so `--dry-run` and the offline tests stay key/network-free), and
+   `events.py` (the in-process **live-feed event bus** that powers the web SSE stream — same
+   on/off shape as tracing: `publish()` is a no-op with no subscribers, so the CLI and offline
+   tests are unaffected; producers tag events via a contextvar set by the orchestrator).
 6. **`duvo/shared_agentic_tools/exa_tool.py`** — the one search tool both scouts and analyst use.
    *Extract:* the native `AsyncExa` client is awaited directly to keep the loop responsive;
    results are formatted to a compact string; failures return a string, not an exception.
@@ -108,17 +112,38 @@ at the repo root is a thin shim that calls `duvo.orchestrator.main`.
     `runs.py` / `account_runs.py` / `events.py` over the three tables in `schema.sql`
     (`runs`, `account_runs`, `writeback_events`). *Extract:* `last_done_for_domain`
     (feeds the diff), `done_domains_for_run` / `done_domains_for_date` (feed `--resume` /
-    `--skip-done-today`), and `derive_action` (status string → ledger verb).
-13. **`duvo/reporting/reporter.py`** + **`duvo/reporting/templates/report.html`** — the
+    `--skip-done-today`), `derive_action` (status string → ledger verb), and `queries.py`
+    (the read-side snapshots — `list_runs`, `get_run`, `get_account_detail` — that back the web API).
+13. **`duvo/api/` + `frontend/`** — the **web console**, a second entry surface over the *same*
+    `orchestrator.run(...)`. Read `api/app.py` (the `create_app()` factory mounted via uvicorn
+    `--factory`; the lifespan owns logging/tracing/the interrupted-run sweep and drains `jobs` +
+    the shared clients; the SPA is served from `frontend/dist/`). Then `api/auth.py` (Google SSO +
+    signed session/CSRF cookies via `itsdangerous`; **auth env is read lazily here, not in
+    `config.py`**, so the app imports without secrets; the `require_real_run_authorization` **#14
+    gate** — allowlisted role *and* explicit `confirm` — is the web mirror of the router's
+    bounded-agency guard). Then `api/routes_runs.py` (`POST /runs` → preflight `start_run_strict`
+    then `asyncio.create_task(run(..., persist=True, manage_clients=False))`; the REST snapshots;
+    and the **SSE** `GET /runs/{id}/stream` that replays the persisted snapshot then forwards live
+    `tool`/`account`/`status` events) and `api/jobs.py` (the in-process task registry — *why the
+    app must be `--workers 1`*). *Extract:* tool events are published from `agent_core` and the
+    account/status context is set in the orchestrator (`events.set_context` / `enrich_context`);
+    the tool-call feed is **live-only / not persisted** (the durable record is `agent_log_json`).
+    The SPA (`frontend/`, Vite + React + TS + Tailwind, pnpm) talks to the backend through one
+    typed client (`src/lib/api.ts`); features split into `new-run`, `live-run` (the `useRunStream`
+    SSE hook), and `account-detail`. You rarely need to read the SPA deeply to change the backend.
+14. **`duvo/reporting/reporter.py`** + **`duvo/reporting/templates/report.html`** — the
     only deliberately *sync* module (pure CPU/file I/O) and the audit dashboard it
     renders (run-scoped under `output/run_reports/`; the score diff is not yet surfaced here).
-14. **`tests/` (skim)** — confirm the contracts. Start with `test_agent_core.py` (loop
+15. **`tests/` (skim)** — confirm the contracts. Start with `test_agent_core.py` (loop
     edge cases incl. falsy-return non-await) and `test_router.py` (the
     guard-fires-before-lazy-import proof via `sys.modules`). The pattern across
     agent tests: patch `run_agent` itself with a fake that calls a chosen tool
     sequence — so logic is tested deterministically without simulating model turns.
     The durable store (tables, `--resume` / `--skip-done-today` skip logic, the
-    write-back diff) is covered too.
+    write-back diff) and the web layer (`test_api_*` — app factory, auth + the #14
+    gate, run launch, SSE, jobs registry — plus `test_infra_events` / `test_event_wiring`)
+    are covered too. The React SPA has its own offline **Vitest** suites under
+    `frontend/src/**` (run with `pnpm test`), mocking the api client / `EventSource`.
 
 ## After reading: the mental model to confirm you have
 
@@ -139,12 +164,18 @@ You understand the codebase when you can explain, from the code:
 - **Durable state & idempotent re-runs:** how `duvo.store` (SQLite) records every run,
   account outcome, and write-back event; how CRM adapters dedup by domain; and how
   `--resume` / `--skip-done-today` make re-runs safe and crash-recoverable. Persistence
-  is best-effort (degrades to a safe default) and dry-runs never persist.
+  is best-effort (degrades to a safe default) and dry-runs never persist on the CLI
+  (the web always persists, so dry-runs are observable there).
+- **The two entry surfaces over one orchestrator:** the CLI (`main.py`) and the web app
+  (`duvo/api/`). For the web app: the `create_app()` factory + single-worker requirement
+  (in-process `jobs` registry + event bus), Google-SSO auth with the **#14 real-run gate**
+  mirroring the router guard, and the live SSE feed (`infra/events.py`) replaying a persisted
+  snapshot then streaming `tool`/`account`/`status` events (tool events are live-only).
 - **The honest limits** (Exa noise, agent-loop latency, test email; and what's still out
   of scope — score-unchanged suppression of Slack/outreach, surfacing the diff in the
   HTML report, a Postgres backend) and the roadmap.
 
-If you can walk all six of those without re-opening files, you're at the target depth.
+If you can walk all seven of those without re-opening files, you're at the target depth.
 For the full synthesized breakdown — module responsibilities, the guard rules spelled
 out, the data contract, testing philosophy, and known limits — read
 `references/architecture.md` (resolve it relative to this `SKILL.md`). Use it to go

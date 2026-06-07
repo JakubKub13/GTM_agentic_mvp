@@ -14,6 +14,11 @@ companies.csv → scout_all (4 scouts ∥) → run_analyst (+apply_guards) → r
 
 Orchestrated in `duvo/orchestrator.py`. Read it first when in doubt.
 
+**Two entry surfaces, one orchestrator.** The same `orchestrator.run(...)` is driven either
+from the **CLI** (`main.py` → `duvo.orchestrator:main`) or the **web app** (`duvo/api/` —
+FastAPI + a Vite/React SPA in `frontend/`). The web path adds auth, durable run-state, and a
+live SSE feed, but never forks the pipeline — see the web conventions before touching `api/`.
+
 ## Where code goes
 
 The package mirrors the `duvo.*` logger tree — one folder per concern:
@@ -21,12 +26,15 @@ The package mirrors the `duvo.*` logger tree — one folder per concern:
 | Layer | Path | Holds |
 |---|---|---|
 | Kernel | `duvo/config.py`, `models.py`, `agent_core.py` | env/constants, the Pydantic contract, the one agent runtime |
-| Orchestration | `duvo/orchestrator.py` | semaphore-bounded `gather` → report |
-| Cross-cutting | `duvo/infra/` | `logging_setup.py`, `http_client.py`, `retry.py`, `tracing.py` |
+| Orchestration | `duvo/orchestrator.py` | semaphore-bounded `gather` → report; sets the event-feed context |
+| Cross-cutting | `duvo/infra/` | `logging_setup.py`, `http_client.py`, `retry.py`, `tracing.py`, `events.py` (live-feed bus) |
 | Shared agentic tools | `duvo/shared_agentic_tools/` | cross-agent tools such as `exa_tool.py` |
 | Agents | `duvo/agents/` | scouts, analyst, router packages with local `prompts/` and `tools/` |
 | Write-backs | `duvo/writeback/` | pluggable CRM / Slack / outreach adapters + dispatchers |
 | Reporting | `duvo/reporting/` | sync HTML audit report |
+| Durable state | `duvo/store/` | SQLite run-state: `db.py`, `runs.py`, `account_runs.py`, `events.py`, `queries.py`, `schema.sql` |
+| Web API | `duvo/api/` | FastAPI: `app.py` (factory + SPA mount), `auth.py` (Google SSO + CSRF + #14 gate), `routes_runs.py` (run launch + REST + SSE), `jobs.py` (in-process task registry) |
+| Frontend | `frontend/` | Vite + React + TS + Tailwind SPA (pnpm); built to `frontend/dist/`, served by the API |
 
 Put new code in the folder that owns its concern. Extend an existing module before adding a new one. `main.py` is a thin shim → `duvo.orchestrator:main`; keep it thin.
 
@@ -36,9 +44,12 @@ Put new code in the folder that owns its concern. Extend an existing module befo
 - **One runtime.** Every agent runs on `agent_core.run_agent`. Do not hand-roll a model loop, call an LLM provider outside `duvo/llm/`, or call the Exa client outside its owning module. See the agent conventions.
 - **One LLM boundary.** `duvo/llm/` owns all model-provider concerns: `agent_core` and the agents speak only the neutral types in `duvo/llm/base.py`. LiteLLM is a sanctioned dependency, but **only `duvo/llm/litellm_provider.py` may import it** — no wire format (OpenAI/Anthropic) leaks past that file. Add a model provider by dropping `duvo/llm/<name>_provider.py` and `@register_llm("<name>")`.
 - **Config via env with defaults** in `config.py`. Guard a key with `require()` only when it is *always* needed before a live network call (Exa; provider-specific LLM keys are validated by the provider); leave write-back keys lazy so `--dry-run` and the offline tests work without a full `.env`.
-- **Per-task isolation.** A failing unit (account / scout beat / write-back tool) is logged and degrades to `None` / `[]` / a `failed: …` status — it never aborts the batch. See `_process_account` and `agents/scouts/isolation.py:run_scout_safe`.
+- **Per-task isolation.** A failing unit (account / scout beat / write-back tool / persistence op) is logged and degrades to `None` / `[]` / a `failed: …` status — it never aborts the batch. See `_process_account`, `agents/scouts/isolation.py:run_scout_safe`, and `store/db.py` (every op degrades to a safe default).
 - **Bounded agency.** Guarantees live in deterministic code, not prompts (see the agent conventions).
 - **One tracing boundary.** Only `duvo/infra/tracing.py` may import `langfuse`, and it imports it lazily — tracing is OFF unless `LANGFUSE_ENABLED=true` with keys, so `--dry-run` and the offline tests never import it or hit the network. Instrument through `tracing.span()` / `tracing.trace_context()`; never import `langfuse` elsewhere.
+- **One live-feed boundary.** Only `duvo/infra/events.py` owns the in-process event bus. Mirror the tracing on/off pattern: `events.publish()` is a **no-op when no one is subscribed**, so the CLI path and offline tests are unaffected. Producers tag events through the contextvar (`set_context`/`enrich_context`); never block the pipeline on a slow subscriber (bounded queue, drop-on-full). Events are bounded + redacted — a `tool` event never carries raw arguments.
+- **Single-process web app.** Run the API with **`uvicorn --workers 1`**: the run/task registry (`api/jobs.py`) and the live event bus are in-process, so a second worker wouldn't see them. The SPA is served by the same process from `frontend/dist/` — one deployable, no separate web server.
+- **Dry-run isolation in the store.** Persistence is real-runs-only on the CLI (`persist = not dry_run`) but **always on** from the web (`persist=True`, so dry-runs are observable too). Real-run queries (diff baseline, idempotency, `--skip-done-today`) filter `dry_run = 0` so a persisted dry-run never baselines, gates, or suppresses a real run.
 
 > These rules are guidance Claude reads, like CLAUDE.md — not enforcement. Guaranteed behavior belongs in code, guards, and tests.
 
@@ -158,3 +169,63 @@ The suite is **fully offline** — no API keys, no network, no real model calls.
 - **Pure functions** (`apply_guards`) get direct unit tests — no mocks.
 
 Run `uv run pytest -q` and confirm green before claiming done.
+
+# Web app conventions (API · durable store · SPA)
+
+> Applies when working in `duvo/api/**`, `duvo/store/**`, `frontend/**`.
+
+The web surface wraps the same `orchestrator.run(...)` the CLI uses — it adds auth, durable
+run-state, and a live feed, but never forks the pipeline. Single process: **`uvicorn
+duvo.api.app:create_app --factory --workers 1`** serves both the API and the built SPA.
+
+## Durable store (`duvo/store/`)
+
+- **One async seam over stdlib `sqlite3`** (`db.py`): sync calls are offloaded via
+  `asyncio.to_thread` (the house rule for sync-only libs). Open with WAL + `synchronous=NORMAL`
+  + `busy_timeout` so concurrently-`gather`-ed accounts can write without "database is locked".
+- **Persistence can never abort the pipeline.** `execute` / `query_one` / `query_all` **log and
+  return a safe default on any error** (mirrors `infra.tracing`). Only the strict preflight
+  (`start_run_strict` / `execute_tx`) re-raises — `POST /runs` must fail fast, not spawn a phantom run.
+- **Schema lives in `schema.sql`** (`PRAGMA user_version` + guarded `ALTER`s for migrations).
+  Three tables: `runs`, `account_runs`, `writeback_events`. Read-side helpers for the API live in
+  `queries.py` (`list_runs`, `get_run`, `get_account_detail` with the prior-run diff).
+- **Dry-run isolation:** real-run queries filter `dry_run = 0` and `action != "simulated"` so a
+  persisted dry-run never baselines a diff, gates idempotency, or counts for `--skip-done-today`.
+
+## API (`duvo/api/`)
+
+- **App factory only** (`app.py:create_app()`), mounted by uvicorn `--factory`. The lifespan owns
+  process-level setup/teardown (logging, tracing, interrupted-run sweep, draining `jobs`, closing
+  the shared http/Exa clients). The SPA is mounted last from `DUVO_FRONTEND_DIR` (default
+  `frontend/dist/`) with an `index.html` fallback; a missing build dir is tolerated (API-only).
+- **Auth env is read lazily in `auth.py`, not `config.py`** — so the app imports and the offline
+  tests run without secrets; only live auth/session use needs `SESSION_SECRET`, `GOOGLE_CLIENT_*`,
+  `AUTH_ALLOWED_*`. Session + CSRF are signed cookies (`itsdangerous`); state-changing routes take
+  the `require_csrf` double-submit guard; every non-auth route takes `get_current_user`.
+- **The #14 real-run gate is code, not a prompt:** a non-dry run must pass
+  `require_real_run_authorization(user, confirm)` (allowlisted role **and** explicit `confirm`) →
+  403 before any persistence. The minted dev-login token is `admin`; mirror this gate for any new
+  side-effecting endpoint.
+- **In-process registry** (`jobs.py`): `POST /runs` spawns `asyncio.create_task(run(...))` and
+  registers it; a done-callback marks a crashed/cancelled run `failed`/`interrupted`. This is why
+  the app is single-worker. Server run path is `persist=True, manage_clients=False,
+  triggered_by=user.email`; the CLI owns its own client lifecycle (`manage_clients=True`).
+- **Live updates over SSE** (`GET /runs/{id}/stream`): replay the persisted snapshot (account +
+  status events) on connect, then forward live `tool`/`account`/`status` events until terminal.
+  Tool events are **live-only and not persisted** (plan #10 MVP semantics) — don't assume the feed
+  backfills tool calls for a completed run; the per-account `agent_log_json` is the durable record.
+
+## Frontend (`frontend/`)
+
+- **pnpm only** (`pnpm install` / `dev` / `build` / `test`). Stack: Vite + React 18 + TypeScript
+  (strict) + Tailwind + shadcn/ui primitives + TanStack Query + React Router. Build with
+  `pnpm build` → `dist/`; the API serves it.
+- **One typed API client** (`src/lib/api.ts`) is the single backend contract — all `fetch`/SSE goes
+  through it with `credentials: 'include'` and the CSRF echo header. Don't scatter `fetch` calls or
+  hard-code routes in components.
+- **Feature-first layout** under `src/features/` (`new-run`, `live-run`, `account-detail`), shared
+  chrome in `src/components/{shell,common,ui}`, auth in `src/auth/`. Mirror the neighbouring file.
+- **Test-first with Vitest + Testing Library** (jsdom), one `*.test.tsx` beside the unit. Tests run
+  fully offline (mock the api client / EventSource) — keep them key/network-free, like the Python suite.
+- **The real-run confirm dialog** (#14) is a UI guard in front of the server gate, not a replacement —
+  keep both. Dry-run defaults ON.
