@@ -43,7 +43,10 @@ APP_ENV = os.environ.get("APP_ENV", "dev")  # tags + Langfuse environment label
 
 MAX_CONCURRENT_ACCOUNTS = int(
     os.environ.get("MAX_CONCURRENT_ACCOUNTS", "5")
-)  # account-level fan-out cap
+)  # per-run account-level fan-out cap
+DUVO_GLOBAL_MAX_ACCOUNTS = int(
+    os.environ.get("DUVO_GLOBAL_MAX_ACCOUNTS", "8")
+)  # process-wide cross-run cap on total concurrent accounts (#17)
 HTTP_TIMEOUT_SECONDS = float(
     os.environ.get("HTTP_TIMEOUT_SECONDS", "30")
 )  # per write-back HTTP request

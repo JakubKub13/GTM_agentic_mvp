@@ -15,7 +15,7 @@ from duvo.agents.analyst.tools.record_assessment import (
     make_record_assessment_tool,
 )
 from duvo.config import MAX_ANALYST_SEARCHES
-from duvo.infra import tracing
+from duvo.infra import events, tracing
 from duvo.infra.logging_setup import get_logger
 from duvo.models import Company, ICPScore, Signal
 from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL, exa_search
@@ -45,6 +45,10 @@ async def run_analyst(company: Company, signals: list[Signal], log=None) -> ICPS
         An ICPScore with deterministic guards applied.
     """
     _log.info("analyst starting: company=%r signals=%d", company.name, len(signals))
+
+    # Plan #9: tag this task's producer context with the analyst role so tool events
+    # from run_agent are attributed correctly in the live feed.
+    events.enrich_context(agent="analyst", beat=None)
 
     signals_json = json.dumps([s.model_dump() for s in signals], ensure_ascii=False, indent=2)
     system = load_analyst_prompt(max_analyst_searches=MAX_ANALYST_SEARCHES)

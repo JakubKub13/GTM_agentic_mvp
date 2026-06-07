@@ -13,7 +13,7 @@ from duvo.agents.scouts.tools.submit_signals import (
     signals_from_payload,
 )
 from duvo.config import MAX_SCOUT_SEARCHES
-from duvo.infra import tracing
+from duvo.infra import events, tracing
 from duvo.infra.logging_setup import get_logger
 from duvo.models import Company, Signal
 from duvo.shared_agentic_tools.exa_tool import EXA_SEARCH_TOOL, exa_search
@@ -40,6 +40,11 @@ async def run_scout(
         A list of Signal objects extracted from the agent's submit_signals call.
     """
     _log.info("scout starting: company=%r beat=%s", company.name, beat_key)
+
+    # Plan #9: tag this task's producer context so tool events from run_agent carry the
+    # agent role + beat. asyncio.gather copies the context per task (scout_all fans out
+    # 4 beats), so the tags stay isolated across the concurrent scouts.
+    events.enrich_context(agent="scout", beat=beat_key)
 
     system = load_scout_prompt(beat_desc=beat_desc, max_scout_searches=MAX_SCOUT_SEARCHES)
     user = (

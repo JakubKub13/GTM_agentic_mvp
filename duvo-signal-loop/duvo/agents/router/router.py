@@ -7,7 +7,7 @@ from duvo.agent_core import run_agent
 from duvo.agents.router.policy import is_confident_tier1
 from duvo.agents.router.prompts import load_router_prompt
 from duvo.agents.router.tools import build_router_toolset
-from duvo.infra import tracing
+from duvo.infra import events, tracing
 from duvo.infra.logging_setup import get_logger
 from duvo.models import RunResult
 
@@ -27,6 +27,10 @@ async def run_router(
     """
     s = rr.score
     confident_t1 = is_confident_tier1(s)
+
+    # Plan #9: tag this task's producer context with the router role so tool events
+    # from run_agent are attributed correctly in the live feed.
+    events.enrich_context(agent="router", beat=None)
 
     _log.info(
         "router start: company=%s tier=%s confident_t1=%s dry_run=%s",

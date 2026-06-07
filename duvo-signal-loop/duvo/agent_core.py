@@ -9,7 +9,7 @@ import inspect
 from collections.abc import Callable
 
 from duvo.config import LLM_MODEL, LLM_PROVIDER
-from duvo.infra import tracing
+from duvo.infra import events, tracing
 from duvo.infra.logging_setup import get_logger
 from duvo.llm.base import LLMRequest, Message, ToolSpec
 from duvo.llm.registry import get_llm_provider
@@ -90,6 +90,16 @@ async def run_agent(
             _log.info("tool called: %s(%s)", tc.name, _short(tc.arguments))
             if log is not None:
                 log.append(f"{tc.name}({_short(tc.arguments)})")
+
+            # Plan #9: publish a bounded, redacted tool event to the live feed. The
+            # producer context (run_id/account/agent/beat) is set upstream via a
+            # contextvar; with no SSE subscribers this is a silent no-op (CLI/offline).
+            ctx = events.get_context()
+            if ctx.get("run_id"):
+                events.publish(
+                    ctx["run_id"],
+                    events.make_tool_event(tool=tc.name, arguments=tc.arguments),
+                )
 
             as_type, emoji = tracing.obs_for(tc.name)
             with tracing.span(
